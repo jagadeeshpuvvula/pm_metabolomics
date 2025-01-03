@@ -1,0 +1,167 @@
+---
+title: "04_metabolic_pathway_viz"
+author: "Jagadeesh Puvvula"
+date: "2025-01-02"
+output: pdf_document
+---
+
+#needs R4.3
+```{r}
+library(pacman)
+p_load(tidyverse, ggkegg, ggfx, ggraph, igraph, 
+       clusterProfiler, dplyr, tidygraph)
+```
+
+#filtering unique molecules to highlight on the metabolic pathways
+```{r}
+res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv")
+
+#summary of results
+summary_df <- res_df |>
+  filter(beta_dir %in% c("negative-significant", "positive-significant"))
+
+#get the significant nodes to highlight
+sig_nodes_x <- unique(unlist(sapply(summary_df$kegg, function(x) {
+  # Split by comma and filter for values starting with 'C'
+  values <- unlist(strsplit(x, ","))
+  # Keep only those starting with 'C'
+  values[grep("^C", values)]
+})))
+
+# Add 'cpd:' prefix
+sig_nodes <- paste0("cpd:", sig_nodes_x)
+```
+
+#map compounds to module names in KEGG database
+```{r}
+get_module_ids <- function(compound_ids) {
+  base_url <- "http://rest.kegg.jp/link/module/"
+  
+  results <- map_dfr(compound_ids, function(compound_id) {
+    query_id <- if(!startsWith(compound_id, "cpd:")) {
+      paste0("cpd:", compound_id)
+    } else {
+      compound_id
+    }
+    
+    response <- GET(paste0(base_url, query_id))
+    
+    if (status_code(response) == 200) {
+      content <- rawToChar(response$content)
+      modules <- if(nchar(content) > 0) {
+        paste(gsub(".*\t", "", strsplit(content, "\n")[[1]]), collapse = ", ")
+      } else {
+        "No modules found"
+      }
+    } else {
+      modules <- "Error in query"
+    }
+    
+    Sys.sleep(0.1)
+    
+    data.frame(
+      Compound_ID = gsub("cpd:", "", query_id),
+      Module_IDs = modules,
+      stringsAsFactors = FALSE
+    )
+  })
+  
+  return(results)
+}
+
+#getting results
+results <- get_module_ids(sig_nodes_x)
+
+#
+unique_modules <- unique(gsub("md:", "", unlist(strsplit(results$Module_IDs[results$Module_IDs != "No modules found"], ", "))))
+cat(paste(sprintf('"%s"', unique_modules), collapse = ", "))
+```
+
+
+```{r}
+g <- pathway("ko01100") |> 
+  mutate(mod=
+           highlight_set_nodes(sig_nodes, how="all"))
+
+ggraph(g, layout="manual", x=x, y=y)+
+    geom_node_rect(fill="grey85",
+                   aes(filter=type == "ortholog"))+
+    overlay_raw_map("ko01100")+
+    geom_node_point(aes(filter=type == "compound"),
+                    shape=21, fill="gray100", 
+                    color="gray100", size=1)+
+    ggfx::with_outer_glow(
+      geom_node_point(aes(filter=mod, x=x, y=y), 
+                      color="red",size=1),
+      colour="yellow",expand=2
+    )+
+    theme_void() 
+```
+
+#function update
+```{r}
+plot_pathway <- function(pathway_id, cpd_list, module_list) {
+    # Process pathway and highlight modules
+    g <- pathway(pathway_id) |>
+        process_line() |>
+        mutate(is_highlight_cpd = name %in% cpd_list)
+    
+    # Add module highlights
+    for (mod in module_list) {
+        g <- g |> highlight_module(module(mod))
+    }
+    
+    # Create the plot
+    ggraph(g, x = x, y = y) +
+        
+        # Highlighted module edges
+        ggfx::with_outer_glow(
+            geom_edge_link0(width = 1,
+                            aes(color = I(fgcolor),
+                                filter = (M00982|M00009|M00011|M00027|M00148|M00149|M00150|M00173|M00374|M00376|M00620|M00956|M00957|M00960|M00030|M00032|M00090|M00115|M00142|M00143|M00144|M00145|M00146|M00147|M00896|M00897|M00898|M00912|M00118|M00887|M00047|M00051|M00958|M00029|M00133|M00134|M00674|M00736|M00785|M00844|M00845|M00879|M00947|M00978|M00016|M00017|M00018|M00033|M00119|M00170|M00171|M00525|M00526|M00527|M00919|M00951|M00024|M00046|M00913|M00125|M00911|M00308|M00309|M00633|M00346|M00532|M00621|M00868|M00895|M00974|M00975|M00026|M00045|M00949|M00036|M00031|M00906|M00918|M00034|M00035|M00368|M00609|M00953|M00015|M00028|M00763|M00876|M00972|M00039|M00137|M00891|M00910|M00107|M00108|M00109|M00786|M00837|M00838|M00970|M00020|M00021|M00094|M00338|M00875|M00121|M00740|M00048|M00916|M00570|M00019|M00672|M00673|M00901|M00025|M00040|M00042|M00043|M00044|M00127|M00369|M00827|M00828|M00889|M00935|M00961|M00939|M00546|M00915|M00959|M00120|M00098|M00630|M00555|M00890|M00014|M00535|M00012|M00168|M00169|M00172|M00373|M00092|M00100|M00554|M00632|M00038|M00023|M00037|M00370|M00789|M00790|M00805|M00808|M00936|M00962|M00963|M00981|M00157|M00158|M00159|M00160|M00114|M00129|M00550|M00113|M00922|M00432|M00914|M00968|M00892|M00909|M00855|M00877|M00052|M00433|M00608|M00104|M00106|M00135))),
+            colour = "red", 
+            expand = 0.25
+        )  +
+        # Highlighted compounds
+        ggfx::with_outer_glow(
+            geom_node_point(aes(filter = is_highlight_cpd),  
+                            color = "red",
+                            size = 4),
+            colour = "orange",
+            expand = 0.5
+        )+
+        # Base nodes
+        geom_node_point(size = 0.25, 
+                        aes(color = I(fgcolor),
+                            filter = fgcolor != "none" & type != "line")) +
+        # Base edges
+        geom_edge_link0(width = 0.05, 
+                        aes(color = I(fgcolor),
+                            filter = type == "line" & fgcolor != "none")) +
+        # Labels
+        geom_node_text(size = 2,
+                       aes(x = x, y = y,
+                           label = graphics_name,
+                           filter = name == "path:ko00270"),
+                       repel = TRUE, 
+                       family = "sans", 
+                       bg.colour = "white") +
+        theme_void()
+}
+```
+
+#
+```{r}
+# Usage example:
+plot_pathway("ko01100", sig_nodes, module_list=c("M00982", "M00009", "M00011", "M00027", "M00148", "M00149", "M00150", "M00173", "M00374", "M00376", "M00620", "M00956", "M00957", "M00960", "M00030", "M00032", "M00090", "M00115", "M00142", "M00143", "M00144", "M00145", "M00146", "M00147", "M00896", "M00897", "M00898", "M00912", "M00118", "M00887", "M00047", "M00051", "M00958", "M00029", "M00133", "M00134", "M00674", "M00736", "M00785", "M00844", "M00845", "M00879", "M00947", "M00978", "M00016", "M00017", "M00018", "M00033", "M00119", "M00170", "M00171", "M00525", "M00526", "M00527", "M00919", "M00951", "M00024", "M00046", "M00913", "M00125", "M00911", "M00308", "M00309", "M00633", "M00346", "M00532", "M00621", "M00868", "M00895", "M00974", "M00975", "M00026", "M00045", "M00949", "M00036", "M00031", "M00906", "M00918", "M00034", "M00035", "M00368", "M00609", "M00953", "M00015", "M00028", "M00763", "M00876", "M00972", "M00039", "M00137", "M00891", "M00910", "M00107", "M00108", "M00109", "M00786", "M00837", "M00838", "M00970", "M00020", "M00021", "M00094", "M00338", "M00875", "M00121", "M00740", "M00048", "M00916", "M00570", "M00019", "M00672", "M00673", "M00901", "M00025", "M00040", "M00042", "M00043", "M00044", "M00127", "M00369", "M00827", "M00828", "M00889", "M00935", "M00961", "M00939", "M00546", "M00915", "M00959", "M00120", "M00098", "M00630", "M00555", "M00890", "M00014", "M00535", "M00012", "M00168", "M00169", "M00172", "M00373", "M00092", "M00100", "M00554", "M00632", "M00038", "M00023", "M00037", "M00370", "M00789", "M00790", "M00805", "M00808", "M00936", "M00962", "M00963", "M00981", "M00157", "M00158", "M00159", "M00160", "M00114", "M00129", "M00550", "M00113", "M00922", "M00432", "M00914", "M00968", "M00892", "M00909", "M00855", "M00877", "M00052", "M00433", "M00608", "M00104", "M00106", "M00135"))
+```
+
+
+```{r}
+ggsave("~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_metabol_path_map.tiff",
+       dpi=300,
+       bg="white",
+       width = 10,
+       height = 8)
+```
+

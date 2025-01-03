@@ -1,0 +1,19 @@
+---
+title: "00_env_init"
+author: "Jagadeesh Puvvula"
+date: "2025-01-01"
+output: pdf_document
+---
+
+```{r}
+library(pacman)
+p_load(tidyverse, janitor, parallel, doParallel)
+```
+
+```{r}
+data<- "~/Documents/peach_heat_metab/data/pj_data/"
+analy_dat<- "~/Documents/peach_heat_metab/analy_data/"
+```
+
+
+

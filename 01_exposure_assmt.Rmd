@@ -1,0 +1,92 @@
+---
+title: "01_exposure_assmt"
+author: "Jagadeesh Puvvula"
+date: "2025-01-01"
+output: pdf_document
+---
+
+#pull data from PEACH/CRIB heat-metabolome project
+```{r}
+df<- read_csv(paste0(analy_dat, "df_for_exposures.csv")) |>
+  dplyr::select(-c(3:7, 9, 11:16, 18:20, 22, 33:37, 40)) |>
+  mutate(lmp_date = as.Date(mdy(lmp_date), format="%Y-%m-%d"),
+         delivery_date = as.Date(mdy(delivery_date), format="%Y-%m-%d")) |>
+  drop_na(9, 18) |>
+  rename(id=pt_id, lat= latitude, long = longitude) 
+```
+
+#want to assign exposures during third trimester (190 to 266 days into pregnancy)
+#has 193 participants with complete data, dropped to 177 due to unavialbility of exposure data
+```{r}
+df_exp<- df |>
+  mutate(start_date = lmp_date + days(190),
+         end_date = lmp_date + days(266)) |>
+  select(id, start_date, end_date, lat, long) |>
+  filter(end_date < as.Date("2020-01-01"))
+```
+
+#assign particulate matter and black carbon exposures
+#Need to update the filename pattern (USHAP_BC or USHAP_PM2.5) in the function
+```{r}
+bc<- getRasterValueInRange(dataframe = df_exp,
+                      input_folder_name = "~/Documents/air_polln_rna_seq/BC_1km_2000_2020",
+                      batch_size = 10)
+
+pm<- getRasterValueInRange(dataframe = df_exp,
+                      input_folder_name = "~/Documents/air_polln_rna_seq/PM_1km_2000_2020",
+                      batch_size = 10)
+```
+
+#clean exposure data
+```{r}
+pm_clean <- pm |>
+  mutate(
+    raster_value = map(raster_value, ~ as.numeric(.x)),
+    pm = map(raster_value, ~ .x[1:length(.x)]), # Extract all values
+    pm_expanded = map(pm, ~ set_names(.x, paste0("pm_", seq_along(.x)))) # Add unique names
+  ) |>
+  select(-raster_value) |> 
+  unnest_wider(pm_expanded) |> # Unnest pm_expanded into multiple columns
+  mutate(across(starts_with("pm_"), as.numeric)) |> # Ensure new columns are numeric
+  select(-c(2:6))
+
+bc_clean <- bc |>
+  mutate(
+    raster_value = map(raster_value, ~ as.numeric(.x)),
+    bc = map(raster_value, ~ .x[1:length(.x)]), # Extract all values
+    bc_expanded = map(bc, ~ set_names(.x, paste0("bc_", seq_along(.x)))) # Add unique names
+  ) |>
+  select(-raster_value) |> 
+  unnest_wider(bc_expanded) |> # Unnest pm_expanded into multiple columns
+  mutate(across(starts_with("bc_"), as.numeric)) |> # Ensure new columns are numeric 
+  select(-c(2:6))
+
+ap_exposures<- left_join(pm_clean, bc_clean, by="id")
+
+save(bc, bc_clean, pm, pm_clean, ap_exposures, file = "~/Documents/air_polln_metabolomics/analytic_dat/exposure_assmnt/exposure_data.rda")
+```
+
+#join exposure to analytic data
+```{r}
+#add linkage variable 
+df_join<- df |>select(c(23,9)) |>clean_names() |>rename(id= pt_id, exp_id = client_sample_number)|>
+  mutate(exp_id = as.character(exp_id))
+
+#read final covariates file exported to metabolon
+df_cov<- read_csv("~/Documents/peach_heat_metab/metabolon_export/exp_cov_for_metabolon_dec3.csv") |>
+  select(-c(12:14)) |>
+  left_join(df_join, by = "id")
+
+#rename linkage variable to join with exposures
+ap_exposures<- ap_exposures |> rename(exp_id = id)
+
+#join exposures and covariates into a dataframe for analysis
+exp_cov_df<- right_join(df_cov, ap_exposures, by = c("id" = "exp_id")) |>
+  mutate(across(where(is.character), as.factor))
+
+save(exp_cov_df, file = "~/Documents/air_polln_metabolomics/analytic_dat/exp_cov_df.rda")
+```
+
+
+
+
