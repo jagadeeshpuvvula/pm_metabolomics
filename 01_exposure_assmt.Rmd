@@ -7,10 +7,12 @@ output: pdf_document
 
 #pull data from PEACH/CRIB heat-metabolome project
 ```{r}
-df<- read_csv(paste0(analy_dat, "df_for_exposures.csv")) |>
+df<- read_csv("~/Documents/air_polln_metabolomics/analytic_dat/df_for_exposures.csv") |>
+  filter(study_id == "CRIB_rita") |>
   dplyr::select(-c(3:7, 9, 11:16, 18:20, 22, 33:37, 40)) |>
   mutate(lmp_date = as.Date(mdy(lmp_date), format="%Y-%m-%d"),
-         delivery_date = as.Date(mdy(delivery_date), format="%Y-%m-%d")) |>
+         delivery_date = as.Date(mdy(delivery_date), format="%Y-%m-%d"),
+         year = year(delivery_date)) |>
   drop_na(9, 18) |>
   rename(id=pt_id, lat= latitude, long = longitude) 
 ```
@@ -19,7 +21,7 @@ df<- read_csv(paste0(analy_dat, "df_for_exposures.csv")) |>
 #has 193 participants with complete data, dropped to 177 due to unavialbility of exposure data
 ```{r}
 df_exp<- df |>
-  mutate(start_date = lmp_date + days(190),
+  mutate(start_date = lmp_date , #+ days(190)
          end_date = lmp_date + days(266)) |>
   select(id, start_date, end_date, lat, long) |>
   filter(end_date < as.Date("2020-01-01"))

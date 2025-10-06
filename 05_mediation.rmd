@@ -1,0 +1,65 @@
+---
+title: "05_mediation"
+author: "Puvvula"
+date: "2025-09-19"
+output: pdf_document
+---
+
+```{r}
+load("~/Documents/air_polln_metabolomics/analytic_dat/df_metabolome_analysis.rda")
+
+exp_cov_df <- exp_cov_df |>
+    rowwise() |>
+    mutate(
+        # Overall counts (existing logic)
+        pm_cnt = sum(if_else(c_across(starts_with("pm")) > 9, 1L, 0L, missing = 0L)),
+        bc_cnt = sum(if_else(c_across(starts_with("bc")) > 1, 1L, 0L, missing = 0L)),
+        
+        # Monthly PM counts (assuming pm_1 to pm_30 is month 1, pm_31 to pm_60 is month 2, etc.)
+        pm_1month = sum(if_else(c_across(pm_1:pm_30) > 9, 1L, 0L, missing = 0L)),
+        pm_2month = sum(if_else(c_across(pm_31:pm_60) > 9, 1L, 0L, missing = 0L)),
+        pm_3month = sum(if_else(c_across(pm_61:pm_77) > 9, 1L, 0L, missing = 0L)),
+        # Add more months as needed: pm_4month, pm_5month, etc.
+        
+        # Monthly BC counts
+        bc_1month = sum(if_else(c_across(bc_1:bc_30) > 1, 1L, 0L, missing = 0L)),
+        bc_2month = sum(if_else(c_across(bc_31:bc_60) > 1, 1L, 0L, missing = 0L)),
+        bc_3month = sum(if_else(c_across(bc_61:bc_77) > 1, 1L, 0L, missing = 0L))
+        # Add more months as needed: bc_4month, bc_5month, etc.
+    ) |>
+    ungroup() |>
+    select(-c(21:174))
+
+bw_df<- read_csv("~/Documents/air_polln_metabolomics/bw_df.csv") |>
+  clean_names() |>
+  filter(record_id %in% exp_cov_df$id) |>
+  select(c(1,38))
+
+med_df <- exp_cov_df |>
+  mutate(id = as.character(id)) |>
+  left_join(
+    bw_df |> mutate(record_id = as.character(record_id)),
+    by = c("id" = "record_id")
+  ) |>
+  filter(birth_weight_at_delivery_in_grams > 2000) |>
+  mutate(
+    sex    = recode(gender, "Male" = "M", "Female" = "F"),   # match Olsen
+    ga     = floor(as.numeric(ga_at_delivery)),              # match Olsen weeks
+    b_wght = as.numeric(birth_weight_at_delivery_in_grams)
+  ) |>
+  left_join(olsen_ref, by = c("sex", "ga")) |>
+  mutate(
+    bw_z_scr = (b_wght - mean_bw) / sd_bw,
+    sex      = recode(sex, "M" = "Male", "F" = "Female")     # optional for reporting
+  ) |>
+  select(-c(mean_bw, sd_bw))
+```
+
+#regress exposures and birth weight
+```{r}
+x<- summary(lm(bw_z_scr ~ pm_2month +
+               race_ethnicity + education + bmi + tobacco_use_dur_preg + alcoh_use_dur_preg + maternal_age + parity
+               ,
+       data=med_df))
+```
+

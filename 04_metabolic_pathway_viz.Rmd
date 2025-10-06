@@ -8,7 +8,7 @@ output: pdf_document
 #needs R4.3
 ```{r}
 library(pacman)
-p_load(tidyverse, ggkegg, ggfx, ggraph, igraph, 
+p_load(tidyverse, ggkegg, ggfx, ggraph, igraph, httr,
        clusterProfiler, dplyr, tidygraph)
 ```
 
@@ -18,7 +18,12 @@ res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mw
 
 #summary of results
 summary_df <- res_df |>
-  filter(beta_dir %in% c("negative-significant", "positive-significant"))
+  filter(beta_dir %in% c("negative-significant", "positive-significant")) |>
+  filter(sub_pathway =="Methionine, Cysteine, SAM and Taurine Metabolism") |>
+  filter(startsWith(variable, "pm")) |>
+  drop_na(kegg) |>
+  select(c(10:13)) |>
+  distinct()
 
 #get the significant nodes to highlight
 sig_nodes_x <- unique(unlist(sapply(summary_df$kegg, function(x) {
@@ -118,7 +123,7 @@ plot_pathway <- function(pathway_id, cpd_list, module_list) {
         ggfx::with_outer_glow(
             geom_edge_link0(width = 1,
                             aes(color = I(fgcolor),
-                                filter = (M00982|M00009|M00011|M00027|M00148|M00149|M00150|M00173|M00374|M00376|M00620|M00956|M00957|M00960|M00030|M00032|M00090|M00115|M00142|M00143|M00144|M00145|M00146|M00147|M00896|M00897|M00898|M00912|M00118|M00887|M00047|M00051|M00958|M00029|M00133|M00134|M00674|M00736|M00785|M00844|M00845|M00879|M00947|M00978|M00016|M00017|M00018|M00033|M00119|M00170|M00171|M00525|M00526|M00527|M00919|M00951|M00024|M00046|M00913|M00125|M00911|M00308|M00309|M00633|M00346|M00532|M00621|M00868|M00895|M00974|M00975|M00026|M00045|M00949|M00036|M00031|M00906|M00918|M00034|M00035|M00368|M00609|M00953|M00015|M00028|M00763|M00876|M00972|M00039|M00137|M00891|M00910|M00107|M00108|M00109|M00786|M00837|M00838|M00970|M00020|M00021|M00094|M00338|M00875|M00121|M00740|M00048|M00916|M00570|M00019|M00672|M00673|M00901|M00025|M00040|M00042|M00043|M00044|M00127|M00369|M00827|M00828|M00889|M00935|M00961|M00939|M00546|M00915|M00959|M00120|M00098|M00630|M00555|M00890|M00014|M00535|M00012|M00168|M00169|M00172|M00373|M00092|M00100|M00554|M00632|M00038|M00023|M00037|M00370|M00789|M00790|M00805|M00808|M00936|M00962|M00963|M00981|M00157|M00158|M00159|M00160|M00114|M00129|M00550|M00113|M00922|M00432|M00914|M00968|M00892|M00909|M00855|M00877|M00052|M00433|M00608|M00104|M00106|M00135))),
+                                filter = (M00017|M00034|M00035|M00368|M00609|M00953|M00021|M00338|M00672|M00673))),
             colour = "red", 
             expand = 0.25
         )  +
@@ -150,10 +155,10 @@ plot_pathway <- function(pathway_id, cpd_list, module_list) {
 }
 ```
 
-#
+
 ```{r}
 # Usage example:
-plot_pathway("ko01100", sig_nodes, module_list=c("M00982", "M00009", "M00011", "M00027", "M00148", "M00149", "M00150", "M00173", "M00374", "M00376", "M00620", "M00956", "M00957", "M00960", "M00030", "M00032", "M00090", "M00115", "M00142", "M00143", "M00144", "M00145", "M00146", "M00147", "M00896", "M00897", "M00898", "M00912", "M00118", "M00887", "M00047", "M00051", "M00958", "M00029", "M00133", "M00134", "M00674", "M00736", "M00785", "M00844", "M00845", "M00879", "M00947", "M00978", "M00016", "M00017", "M00018", "M00033", "M00119", "M00170", "M00171", "M00525", "M00526", "M00527", "M00919", "M00951", "M00024", "M00046", "M00913", "M00125", "M00911", "M00308", "M00309", "M00633", "M00346", "M00532", "M00621", "M00868", "M00895", "M00974", "M00975", "M00026", "M00045", "M00949", "M00036", "M00031", "M00906", "M00918", "M00034", "M00035", "M00368", "M00609", "M00953", "M00015", "M00028", "M00763", "M00876", "M00972", "M00039", "M00137", "M00891", "M00910", "M00107", "M00108", "M00109", "M00786", "M00837", "M00838", "M00970", "M00020", "M00021", "M00094", "M00338", "M00875", "M00121", "M00740", "M00048", "M00916", "M00570", "M00019", "M00672", "M00673", "M00901", "M00025", "M00040", "M00042", "M00043", "M00044", "M00127", "M00369", "M00827", "M00828", "M00889", "M00935", "M00961", "M00939", "M00546", "M00915", "M00959", "M00120", "M00098", "M00630", "M00555", "M00890", "M00014", "M00535", "M00012", "M00168", "M00169", "M00172", "M00373", "M00092", "M00100", "M00554", "M00632", "M00038", "M00023", "M00037", "M00370", "M00789", "M00790", "M00805", "M00808", "M00936", "M00962", "M00963", "M00981", "M00157", "M00158", "M00159", "M00160", "M00114", "M00129", "M00550", "M00113", "M00922", "M00432", "M00914", "M00968", "M00892", "M00909", "M00855", "M00877", "M00052", "M00433", "M00608", "M00104", "M00106", "M00135"))
+plot_pathway("ko01100", sig_nodes, module_list=c("M00017", "M00034", "M00035", "M00368", "M00609", "M00953", "M00021", "M00338", "M00672", "M00673"))
 ```
 
 
@@ -164,4 +169,36 @@ ggsave("~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_metabol_path_map.
        width = 10,
        height = 8)
 ```
+
+#HMDB plotting
+```{r}
+#devtools::install_github("lanagarmire/lilikoi")
+#library(lilikoi)
+convertResults <- lilikoi.MetaTOpathway(hmdb_list, id.type="hmdb")
+head(convertResults$table)
+PDSmatrix <- lilikoi.PDSfun(convertResults$table)
+```
+
+```{r}
+# Initialize RaMP database
+rampDB <- RaMP()
+
+# Prepare your HMDB list as a data frame with prefix column name
+hmdb_list <- c("HMDB0000192", "HMDB0002757", "HMDB0000696", "HMDB0000574", 
+               "HMDB0011745", "HMDB0002005", "HMDB0000731", "HMDB0001087", 
+               "HMDB0000996", "HMDB0240253")
+
+# Call getPathwayFromAnalyte() function (note: it requires 'conpass' if using local MySQL, but works with local rampDB by default)
+pathways_df <- getPathwayFromAnalyte(analytes = hmdb_list,
+                                    NameOrIds = "ids",
+                                    analyte_type = "metabolites",
+                                    find_synonym = FALSE,
+                                    db = rampDB)
+
+print(pathways_df)
+```
+
+
+
+
 

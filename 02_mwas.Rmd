@@ -70,83 +70,169 @@ save(exp_cov_df, transposed_df, df_annotations,
 #MWAS
 ```{r}
 load("~/Documents/air_polln_metabolomics/analytic_dat/df_metabolome_analysis.rda")
+
+exp_cov_df <- exp_cov_df |>
+    rowwise() |>
+    mutate(
+        # Overall counts (existing logic)
+        pm_cnt = sum(if_else(c_across(starts_with("pm")) > 15, 1L, 0L, missing = 0L)),
+        bc_cnt = sum(if_else(c_across(starts_with("bc")) > 1, 1L, 0L, missing = 0L)),
+        
+        # Monthly PM counts (assuming pm_1 to pm_30 is month 1, pm_31 to pm_60 is month 2, etc.)
+        pm_1month = sum(if_else(c_across(pm_1:pm_30) > 15, 1L, 0L, missing = 0L)),
+        pm_2month = sum(if_else(c_across(pm_31:pm_60) > 15, 1L, 0L, missing = 0L)),
+        pm_3month = sum(if_else(c_across(pm_61:pm_77) > 15, 1L, 0L, missing = 0L)),
+        # Add more months as needed: pm_4month, pm_5month, etc.
+        
+        # Monthly BC counts
+        bc_1month = sum(if_else(c_across(bc_1:bc_30) > 1, 1L, 0L, missing = 0L)),
+        bc_2month = sum(if_else(c_across(bc_31:bc_60) > 1, 1L, 0L, missing = 0L)),
+        bc_3month = sum(if_else(c_across(bc_61:bc_77) > 1, 1L, 0L, missing = 0L))
+        # Add more months as needed: bc_4month, bc_5month, etc.
+    ) |>
+    ungroup() |>
+    select(-c(21:174))
 ```
 
 #MWAS - loop
 ```{r}
-appliedepi::mwas_lm_loop(feature_table = transposed_df, 
-                         exp_cov_data = exp_cov_df,
-                         exposures = names(exp_cov_df)[21:174],
-                         covar = c("race_ethnicity", "education", "bmi", "parity",
-                                   "ga_at_delivery", "tobacco_use_dur_preg", 
-                                   "alcoh_use_dur_preg",
-                                   "gender"), 
-                         output_folder = "~/Documents/air_polln_metabolomics/result/lm_mwas",
-                         mwas_file_name="placenta_mwas.csv",
-                         fdr_cutoff= 0.2)
+# Full population
+mwas_lm_loop(
+  feature_table = transposed_df, 
+  exp_cov_data = exp_cov_df,
+  exposures = names(exp_cov_df)[21:28],
+  covar = c("race_ethnicity", "education", "bmi", "parity",
+            "ga_at_delivery", "tobacco_use_dur_preg", 
+            "alcoh_use_dur_preg", "gender"), 
+  output_folder = "~/Documents/air_polln_metabolomics/result/lm_mwas",
+  mwas_file_name = "placenta_mwas_june_2025.csv",
+  fdr_cutoff = 0.2
+  )
+
+# Subset by gender
+exp_cov_df_male <- exp_cov_df |> filter(gender == "Male")
+exp_cov_df_female <- exp_cov_df |> filter(gender == "Female")
+
+# Subset transposed_df by keeping only 'chem_id' and the appropriate sample columns
+transposed_df_male <- transposed_df |>
+  select(chem_id, all_of(exp_cov_df_male$parent_sample_name))
+
+transposed_df_female <- transposed_df |>
+  select(chem_id, all_of(exp_cov_df_female$parent_sample_name))
+
+# Male only
+mwas_lm_loop(
+  feature_table = transposed_df_male, 
+  exp_cov_data = exp_cov_df_male,
+  exposures = names(exp_cov_df_male)[21:28],
+  covar = c("race_ethnicity", "education", "bmi", "parity",
+            "ga_at_delivery", "tobacco_use_dur_preg", 
+            "alcoh_use_dur_preg"), 
+  output_folder = "~/Documents/air_polln_metabolomics/result/lm_mwas",
+  mwas_file_name = "placenta_mwas_june_2025_male.csv",
+  fdr_cutoff = 0.2
+  )
+
+# Female only
+mwas_lm_loop(
+  feature_table = transposed_df_female, 
+  exp_cov_data = exp_cov_df_female,
+  exposures = names(exp_cov_df_female)[21:28],
+  covar = c("race_ethnicity", "education", "bmi", "parity",
+            "ga_at_delivery", "tobacco_use_dur_preg", 
+            "alcoh_use_dur_preg"), 
+  output_folder = "~/Documents/air_polln_metabolomics/result/lm_mwas",
+  mwas_file_name = "placenta_mwas_june_2025_female.csv",
+  fdr_cutoff = 0.2
+  )
+
 ```
 
 
 #load mwas results
 ```{r}
 #beta_dir variable is based on 20% FDR cutoff
-res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas.csv") |>
+res_all<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_june_2025.csv") |> mutate(sex = "all")
+res_m<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_june_2025_male.csv") |> mutate(sex = "male")
+res_f<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_june_2025_female.csv") |> mutate(sex = "female")
+
+mwas_res<- bind_rows(res_all, res_m, res_f) |>
   clean_names() |>
   left_join(
     df_annotations |>
       select(1, 5, 6, 11, 19), 
     by = "chem_id"
-  )
+  ) 
 
-write_csv(res_df, "~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv")
+write_csv(mwas_res, "~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv")
 ```
 
 #summary of results
 ```{r}
-res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv")
+res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv") |>
+  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$"))
 
 summary_df <- res_df |>
-  filter(beta_dir %in% c("negative-significant", "positive-significant")) |>
-  group_by(variable, super_pathway, sub_pathway, beta_dir) |>
-  summarise(count = n(), .groups = "drop") |>
-  filter(count>1) |>
-  mutate(exposure = case_when(
-    str_starts(variable, "bc") ~ "Black carbon",
-    str_starts(variable, "pm") ~ "PM2.5",
-    TRUE ~ NA_character_  # Default case if neither condition is met
-  ),
-  exposure_window = gsub("^(pm_|bc_)", "", variable),
-  exposure_window = factor(exposure_window, 
-                             levels = sort(unique(as.numeric(gsub("^(pm_|bc_)", "", variable)))))
+  filter(fdr < 0.2) |>
+  group_by(variable, super_pathway, sub_pathway, beta_dir, sex) |>
+  summarise(
+    count = n(),
+    chemical_names = paste(unique(chemical_name), collapse = ", "),
+    .groups = "drop"
   ) |>
-  mutate(super_pathway = recode(super_pathway, 
-                                "Partially Characterized Molecules" = "Other",
-                                "Energy" = "Other"),
-         super_pathway = fct_relevel(super_pathway, 
-                                     "Lipid", 
-                                     "Amino Acid", 
-                                     "Carbohydrate", 
-                                     "Cofactors and Vitamins", 
-                                     "Peptide", 
-                                     "Nucleotide", 
-                                     "Xenobiotics",
-                                     "Other"))
+  mutate(
+    exposure = case_when(
+      str_starts(variable, "bc") ~ "Black carbon",
+      str_starts(variable, "pm") ~ "PM2.5",
+      TRUE ~ NA_character_
+    ),
+    exposure_window = case_when(
+    str_ends(variable, "cnt") ~ "Overall",
+    str_ends(variable, "1month") ~ "7 month",
+    str_ends(variable, "2month") ~ "8 month",
+    str_ends(variable, "3month") ~ "9 month",
+    TRUE ~ NA_character_
+  ),
+  exposure_window = factor(exposure_window, levels = c("Overall", "7 month", "8 month", "9 month")),
+  super_pathway = recode(super_pathway, 
+                           "Partially Characterized Molecules" = "Other",
+                           "Energy" = "Other"),
+  super_pathway = fct_relevel(super_pathway, 
+                               "Lipid", 
+                               "Amino Acid", 
+                               "Carbohydrate", 
+                               "Cofactors and Vitamins", 
+                               "Peptide", 
+                               "Nucleotide", 
+                               "Xenobiotics",
+                               "Other"),
+  sex = case_match(sex,
+                   "all" ~ "Overall", "male" ~ "Male", "female" ~ "Female", .default = sex),
+  sex = factor(sex, levels = c("Overall", "Male", "Female"))
+  ) 
 ```
 
 #visualizing results - Summarized heat map
 ```{r}
 ggplot(summary_df, aes(x = exposure_window, y = sub_pathway, fill = count)) +
-  facet_grid(super_pathway~exposure, scales="free", space="free",
-             switch = "both",
-             labeller = label_wrap_gen(width = 15)) +
+  facet_nested(super_pathway ~ exposure + sex,
+               scales = "free",
+               space = "free",
+               switch = "both",
+               labeller = label_wrap_gen(width = 15)) +
   geom_tile(color = "white") + 
-  scale_fill_viridis(name = "Number of metabolites") +
-  labs(x = "Gestational period (days) - Third trimester", y = "Metabolic pathways") +
+  scale_fill_viridis(
+  name = "Number of metabolites",
+  breaks = c(1, 5, 10, 15),
+  labels = c("1", "5", "10", "15"),
+  limits = c(1, 15)
+  ) +
+  labs(x = "Gestational period - Third trimester", y = "Metabolic pathways") +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, color="black"),
-        axis.text.y = element_text(size=11, color="black"),
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, color="black"),
+        axis.text.y = element_text(size=10, color="black"),
         legend.position = "bottom",
-        legend.text = element_text(angle = 45, hjust = 1, color="black"),
+        legend.text = element_text(angle = 0, hjust = 1, color="black"),
         legend.title = element_text(vjust = 1),
         legend.key.height = unit(0.3, "cm"),
         panel.grid.major.x = element_blank(), 
@@ -161,7 +247,7 @@ ggplot(summary_df, aes(x = exposure_window, y = sub_pathway, fill = count)) +
 ggsave("~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_pathway.tiff",
        dpi=300,
        bg="white",
-       width = 9.5,
+       width = 12,
        height = 14)
 ```
 
@@ -169,21 +255,30 @@ ggsave("~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_pathway.tiff",
 ```{r}
 # Create your plot function (same as before)
 create_pathway_plot <- function(data, pathway) {
-  subset_data <- data %>% filter(super_pathway == pathway)
+  subset_data <- data %>% 
+    filter(super_pathway == pathway) |>
+    filter(str_starts(variable, "bc"))
   
   ggplot(subset_data, aes(x = estimate, y = sub_pathway)) +
+    # Non-significant points first (gray, transparent)
     geom_point(
-      aes(color = case_when(
-        fdr >= 0.2 ~ "lightgray",
-        fdr < 0.2 & estimate > 0 ~ "blue",
-        fdr < 0.2 & estimate < 0 ~ "red",
-        TRUE ~ "lightgray"
-      )), 
-      size = 0.5, 
-      position = position_jitter(height = 0.2, width = 0.1)
+      data = subset_data[subset_data$fdr >= 0.2, ],
+      color = "lightgray", alpha = 0.3, size = 0.5,
+      position = position_jitter(height = 0.2, width = 0.01)
+    ) +
+    # Significant positive points (red)
+    geom_point(
+      data = subset_data[subset_data$fdr < 0.2 & subset_data$estimate > 0, ],
+      color = "royalblue", alpha = 1, size = 0.5,
+      position = position_jitter(height = 0.2, width = 0.01)
+    ) +
+    # Significant negative points (blue) 
+    geom_point(
+      data = subset_data[subset_data$fdr < 0.2 & subset_data$estimate < 0, ],
+      color = "red", alpha = 1, size = 0.5,
+      position = position_jitter(height = 0.2, width = 0.01)
     ) +
     geom_vline(xintercept = 0, color = "black", linetype = "dotted") +
-    scale_color_identity() +
     labs(x = NULL, y = NULL, title = pathway) +
     theme_minimal() +
     theme(
@@ -194,25 +289,26 @@ create_pathway_plot <- function(data, pathway) {
     )
 }
 
-# Open TIFF device
+# Create your plots
+# First check if any devices are open and close them
+while(dev.cur() > 1) dev.off()
+
+# Open the TIFF device
 tiff(
-  filename = "~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_lm_summmary.tiff",
-  width = 14,      # Width in inches
-  height = 12,      # Height in inches
-  units = "in",    # Units in inches
-  res = 300,       # Resolution in dpi (300 for publication quality)
-  compression = "lzw"  # Compression method
+  filename = "~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_lm_summmary_bc.tiff",
+  width = 14,
+  height = 12,
+  units = "in",
+  res = 300
 )
 
 # Create your plots
 lipid_plot <- create_pathway_plot(res_df, "Lipid")
-
 col2_plots <- list(
   create_pathway_plot(res_df, "Amino Acid"),
   create_pathway_plot(res_df, "Carbohydrate"),
   create_pathway_plot(res_df, "Nucleotide")
 )
-
 col3_plots <- list(
   create_pathway_plot(res_df, "Cofactors and Vitamins"),
   create_pathway_plot(res_df, "Energy"),
@@ -225,20 +321,13 @@ col3_plots <- list(
 col2 <- arrangeGrob(grobs = col2_plots, ncol = 1)
 col3 <- arrangeGrob(grobs = col3_plots, ncol = 1)
 
-# Create final arrangement
-g <- arrangeGrob(
-  lipid_plot, col2, col3,
-  ncol = 3,
-  widths = c(1.2, 1, 0.8),
-  top = textGrob(" ", gp = gpar(fontsize = 14)),
-  bottom = textGrob("Estimate", gp = gpar(fontsize = 12)),
-  left = textGrob(" ", rot = 90, gp = gpar(fontsize = 14))
-)
+# Combine all three columns into final layout
+g <- arrangeGrob(lipid_plot, col2, col3, ncol = 3)
 
 # Draw the plot
 grid.draw(g)
 
-# Close the device (this saves the file)
+# Close the device
 dev.off()
 ```
 
@@ -248,38 +337,49 @@ dev.off()
 res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv")
 
 #summary of results
-summary_df <- res_df |>
-  filter(beta_dir %in% c("negative-significant", "positive-significant")) |>
+summary_df2 <- res_df |>
+  filter(fdr<0.2,
+         !str_detect(variable, "cnt$")) |>
   mutate(prefix = ifelse(grepl("^pm_", variable), "pm_", 
                          ifelse(grepl("^bc_", variable), "bc_", NA))) |>
   filter(!is.na(prefix)) |>
-  group_by(chemical_name, super_pathway, sub_pathway, prefix) |>
+  group_by(chemical_name, super_pathway, sub_pathway, prefix, sex) |>
   summarise(count = n(), .groups = "drop") |>
-  filter(count > 4)
+  filter(count > 1)
 
 viz_df<- res_df |>
-  filter(beta_dir %in% c("negative-significant", "positive-significant"))|>
-  mutate(exposure = case_when(
-    str_starts(variable, "bc") ~ "Black carbon",
-    str_starts(variable, "pm") ~ "PM2.5",
-    TRUE ~ NA_character_  # Default case if neither condition is met
-  ),
-  exposure_window = gsub("^(pm_|bc_)", "", variable),
-  exposure_window = factor(exposure_window, 
-                             levels = sort(unique(as.numeric(gsub("^(pm_|bc_)", "", variable)))))
-  ) |>
-  filter(chemical_name %in% summary_df$chemical_name) |>
+  filter(chemical_name %in% summary_df2$chemical_name,
+         fdr < 0.2) |>
   mutate(
-    predictor_numeric = as.numeric(gsub(".*_([0-9]+)$", "\\1", variable))
-  ) |>
-  mutate(super_pathway = fct_relevel(super_pathway, 
-                                     "Lipid", 
-                                     "Amino Acid", 
-                                     "Carbohydrate", 
-                                     "Cofactors and Vitamins", 
-                                     "Peptide", 
-                                     "Nucleotide", 
-                                     "Xenobiotics"))
+    exposure = case_when(
+      str_starts(variable, "bc") ~ "Black carbon",
+      str_starts(variable, "pm") ~ "PM2.5",
+      TRUE ~ NA_character_
+    ),
+    exposure_window = case_when(
+    str_ends(variable, "cnt") ~ "Overall",
+    str_ends(variable, "1month") ~ "7 month",
+    str_ends(variable, "2month") ~ "8 month",
+    str_ends(variable, "3month") ~ "9 month",
+    TRUE ~ NA_character_
+  ),
+  exposure_window = factor(exposure_window, levels = c("Overall", "7 month", "8 month", "9 month")),
+  super_pathway = recode(super_pathway, 
+                           "Partially Characterized Molecules" = "Other",
+                           "Energy" = "Other"),
+  super_pathway = fct_relevel(super_pathway, 
+                               "Lipid", 
+                               "Amino Acid", 
+                               "Carbohydrate", 
+                               "Cofactors and Vitamins", 
+                               "Peptide", 
+                               "Nucleotide", 
+                               "Xenobiotics",
+                               "Other"),
+  sex = case_match(sex,
+                   "all" ~ "Overall", "male" ~ "Male", "female" ~ "Female", .default = sex),
+  sex = factor(sex, levels = c("Overall", "Male", "Female"))
+  ) 
 ```
 
 ```{r}
@@ -293,23 +393,285 @@ ggplot(viz_df, aes(x = exposure_window, y = chemical_name, fill = estimate)) +
   name = "Estimate"
 ) +
   labs(x = "Fine particulate matter exposure during third trimester", y = "Metabolite") +
-  facet_grid(super_pathway~exposure, scales="free", space="free",
-             switch = "both",
-             labeller = label_wrap_gen(width = 15)) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+  facet_nested(super_pathway ~ exposure + sex,
+               scales = "free",
+               space = "free",
+               switch = "both",
+               labeller = label_wrap_gen(width = 15))  +
+  theme_minimal()  +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, color="black"),
+        axis.text.y = element_text(size=9.5, color="black"),
         legend.position = "bottom",
-        legend.text = element_text(angle = 45, hjust = 1),
+        legend.text = element_text(angle = 45, hjust = 1, color="black"),
         legend.title = element_text(vjust = 1),
         legend.key.height = unit(0.3, "cm"),
         panel.grid.major.x = element_blank(), 
-        panel.grid.minor.x = element_blank() )
+        panel.grid.minor.x = element_blank(),
+        strip.text.y = element_text(size=0, angle = 45, hjust = 0, color="black"),
+        strip.text.x = element_text(size=11, color="black"),
+        strip.placement = "outside", 
+        strip.background = element_blank() )
 ```
 
 ```{r}
 ggsave("~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_metabolite.tiff",
        dpi=300,
        bg="white",
-       width = 8,
+       width = 11,
        height = 12)
 ```
+
+#export data for python - to produce sankey plot
+```{r}
+res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv") |>
+  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$"))
+
+summary_df <- res_df |>
+  filter(fdr < 0.2) |>
+  mutate(
+    exposure = case_when(
+      str_starts(variable, "bc") ~ "Black carbon",
+      str_starts(variable, "pm") ~ "PM2.5",
+      TRUE ~ NA_character_
+    ),
+  super_pathway = recode(super_pathway, 
+                           "Partially Characterized Molecules" = "Other",
+                           "Energy" = "Other"),
+  super_pathway = fct_relevel(super_pathway, 
+                               "Lipid", 
+                               "Amino Acid", 
+                               "Carbohydrate", 
+                               "Cofactors and Vitamins", 
+                               "Peptide", 
+                               "Nucleotide", 
+                               "Xenobiotics",
+                               "Other")
+  ) |> select(c(9:12,14)) |>
+  group_by(exposure, super_pathway, sub_pathway) |>
+  summarise(
+    n_chem = n_distinct(chemical_name),
+    .groups = "drop"
+  ) 
+
+write_csv(summary_df, "~/Documents/air_polln_metabolomics/result/lm_mwas/sankey_plt.csv")
+```
+
+#upset - overlap plot
+```{r}
+res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv") |>
+  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$")) |>
+  filter(fdr < 0.2)  |>
+  mutate(
+    exposure = case_when(
+      str_starts(variable, "bc_cnt") ~ "Black carbon - Overall",
+      str_starts(variable, "bc_1month") ~ "Black carbon - 7 month",
+      str_starts(variable, "bc_2month") ~ "Black carbon - 8 month",
+      
+      str_starts(variable, "pm_cnt") ~ "PM2.5 - Overall",
+      str_starts(variable, "pm_1month") ~ "PM2.5 - 7 month",
+      str_starts(variable, "pm_2month") ~ "PM2.5 - 8 month",
+      str_starts(variable, "pm_3month") ~ "PM2.5 - 9 month",
+      TRUE ~ NA_character_
+    ),
+    exposure_sex = paste(exposure, sex, sep = "-")
+    ) |>
+  select(c(12,15))
+
+# Step 1: Convert to wide format
+wide_df <- res_df |>
+  distinct(chemical_name, exposure_sex) |>
+  mutate(value = 1) |>
+  pivot_wider(names_from = exposure_sex, values_from = value, values_fill = 0) |>
+  as.data.frame()
+
+# 1. Define custom column order
+custom_order <- c(
+  "Black carbon - Overall-all",
+  "Black carbon - 7 month-all",
+  "Black carbon - 8 month-all",
+  "Black carbon - Overall-male",
+  "Black carbon - 7 month-male",
+  
+  "PM2.5 - Overall-all",
+  "PM2.5 - 7 month-all",
+  "PM2.5 - 8 month-all",
+  "PM2.5 - Overall-male",
+  "PM2.5 - 7 month-male",
+  "PM2.5 - 8 month-male",
+  
+  "PM2.5 - 8 month-female",
+  "PM2.5 - 9 month-female"
+)
+
+# 2. Filter to just the columns present and reorder
+present_order <- custom_order[custom_order %in% names(wide_df)]
+wide_df_ordered <- wide_df[, present_order]
+
+# 3. Create a matching color vector for the sets (optional)
+set_colors <- c(
+  rep("#E69F00", 5),  # Black carbon
+  rep("#0072B2", 8)   # PM2.5
+)
+
+# Try opening TIFF graphics device
+tiff_file <- "~/Documents/air_polln_metabolomics/result/lm_mwas/upset_plot.tiff"
+
+tiff(filename = tiff_file,
+     width = 7,
+     height = 8,
+     units = "in",
+     res = 300)
+
+# Confirm device is open
+if (dev.cur() == 1) stop("TIFF device did not open. Check file path and permissions.")
+
+# Plot
+upset(wide_df_ordered,
+      sets = present_order,
+      keep.order = TRUE,
+      nsets = length(present_order),
+      nintersects = 30,
+      set_size.scale_max = 200,
+      sets.bar.color = set_colors[1:length(present_order)],
+      set_size.show = TRUE,
+      text.scale = 1.3,
+      point.size = 3,
+      line.size = 1,
+      mainbar.y.label = "No. of overlapping metabolites\nassociated with \ngestational air pollutant exposures",
+      sets.x.label = "Metabolites\nby exposure & sex",
+      mainbar.y.max = NULL)
+
+# Close device only if open
+if (dev.cur() > 1) dev.off()
+
+```
+
+
+#summary for article text
+```{r}
+#total tested
+# Example: Table S1 as a data frame
+table_s1 <- tibble::tribble(
+  ~super_pathway, ~n_sub_pathways_total, ~n_chem_total,
+  "Lipid", 55, 433,
+  "Amino Acid", 16, 176,
+  "Xenobiotics", 13, 103,
+  "Cofactors and Vitamins", 10, 35,
+  "Carbohydrate", 9, 43,
+  "Nucleotide", 9, 76,
+  "Peptide", 6, 43,
+  "Energy", 2, 12,
+  "Partially Characterized Molecules", 1, 10,
+  "Other", 0, 140
+)
+
+res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv") |>
+  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$"))
+
+summary_df<- res_df |>
+  filter(fdr < 0.2)  |>
+  mutate(
+    exposure = case_when(
+      str_starts(variable, "bc") ~ "Black carbon",
+      str_starts(variable, "pm") ~ "PM2.5",
+      TRUE ~ NA_character_
+    )) |> 
+  select(c(14,10,11,12,9)) |>
+  distinct()  |>
+  group_by(exposure, super_pathway, sex) |>
+  summarise(
+    n_sub_pathway = n_distinct(sub_pathway),
+    n_chem = n_distinct(chemical_name),
+    .groups = "drop"
+  ) |>
+  left_join(table_s1, by = "super_pathway") |>
+  mutate(
+    sub_pathway_ratio = sprintf(
+      "%d/%d (%.1f)",
+      n_sub_pathway, n_sub_pathways_total,
+      (n_sub_pathway / n_sub_pathways_total) * 100
+    ),
+    n_chem_ratio = sprintf(
+      "%d/%d (%.1f)",
+      n_chem, n_chem_total,
+      (n_chem / n_chem_total) * 100
+    )
+  ) |>
+  select(c(1:3,8,9)) |>
+  unite("exposure_sex", exposure, sex, sep = "_") |>   # Combine exposure and sex into one column for pivoting
+  pivot_wider(
+    names_from = exposure_sex,
+    values_from = c(sub_pathway_ratio, n_chem_ratio)
+  )
+
+write_csv(summary_df, "~/Documents/air_polln_metabolomics/result/lm_mwas/summary_tbl.csv")
+```
+
+#article text - specific pathway detailing
+```{r}
+x <- res_df |>
+  filter(fdr < 0.2) |>
+  mutate(
+    window = str_extract(variable, "(?<=_).*"),
+    exposure = case_when(
+      str_starts(variable, "bc") ~ "Black carbon",
+      str_starts(variable, "pm") ~ "PM2.5",
+      TRUE ~ NA_character_
+    ),
+  super_pathway = recode(super_pathway, 
+                           "Partially Characterized Molecules" = "Other",
+                           "Energy" = "Other"),
+  super_pathway = fct_relevel(super_pathway, 
+                               "Lipid", 
+                               "Amino Acid", 
+                               "Carbohydrate", 
+                               "Cofactors and Vitamins", 
+                               "Peptide", 
+                               "Nucleotide", 
+                               "Xenobiotics",
+                               "Other")
+  ) |> select(c(9:12,14,15)) |>
+  filter(sub_pathway =="Lysine",
+         exposure == "Black carbon",
+         sex == "male") |>
+  distinct(chemical_name) |> 
+  pull(chemical_name) |> 
+  str_c(collapse = ", ")
+
+chem_list <- str_split(x, ",\\s*") |> unlist()
+
+load("~/Documents/air_polln_metabolomics/analytic_dat/df_metabolome_analysis.rda")
+rm(exp_cov_df, transposed_df)
+
+#Get compound IDs
+kegg_list <- df_annotations |> 
+  filter(chemical_name %in% chem_list) |> 
+  pull(hmdb)
+```
+
+#for text description
+```{r}
+text_summary<- res_df |>
+  filter(fdr < 0.2) |>
+  mutate(
+    exposure = case_when(
+      str_starts(variable, "bc") ~ "Black carbon",
+      str_starts(variable, "pm") ~ "PM2.5",
+      TRUE ~ NA_character_
+    ),
+  super_pathway = recode(super_pathway, 
+                           "Partially Characterized Molecules" = "Other",
+                           "Energy" = "Other"),
+  super_pathway = fct_relevel(super_pathway, 
+                               "Lipid", 
+                               "Amino Acid", 
+                               "Carbohydrate", 
+                               "Cofactors and Vitamins", 
+                               "Peptide", 
+                               "Nucleotide", 
+                               "Xenobiotics",
+                               "Other")
+  ) |>
+  select(c(7:14))
+```
+
