@@ -43,7 +43,7 @@ df_placenta_metabolome <- placenta_metabolome |>
 #drop metabolites that have identical values 
 ```{r}
 df_placenta_metabolome_filt <- df_placenta_metabolome |>
-  select(-where(~any(is.na(.))))
+  dplyr::select(-where(~any(is.na(.))))
 ```
 
 
