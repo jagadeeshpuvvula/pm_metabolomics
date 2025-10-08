@@ -8,28 +8,68 @@ output: pdf_document
 ```{r}
 load("~/Documents/air_polln_metabolomics/analytic_dat/df_metabolome_analysis.rda")
 
-exp_cov_df <- exp_cov_df |>
-    rowwise() |>
-    mutate(
-        # Overall counts (existing logic)
-        pm_cnt = sum(if_else(c_across(starts_with("pm")) > 9, 1L, 0L, missing = 0L)),
-        bc_cnt = sum(if_else(c_across(starts_with("bc")) > 1, 1L, 0L, missing = 0L)),
-        
-        # Monthly PM counts (assuming pm_1 to pm_30 is month 1, pm_31 to pm_60 is month 2, etc.)
-        pm_1month = sum(if_else(c_across(pm_1:pm_30) > 9, 1L, 0L, missing = 0L)),
-        pm_2month = sum(if_else(c_across(pm_31:pm_60) > 9, 1L, 0L, missing = 0L)),
-        pm_3month = sum(if_else(c_across(pm_61:pm_77) > 9, 1L, 0L, missing = 0L)),
-        # Add more months as needed: pm_4month, pm_5month, etc.
-        
-        # Monthly BC counts
-        bc_1month = sum(if_else(c_across(bc_1:bc_30) > 1, 1L, 0L, missing = 0L)),
-        bc_2month = sum(if_else(c_across(bc_31:bc_60) > 1, 1L, 0L, missing = 0L)),
-        bc_3month = sum(if_else(c_across(bc_61:bc_77) > 1, 1L, 0L, missing = 0L))
-        # Add more months as needed: bc_4month, bc_5month, etc.
-    ) |>
-    ungroup() |>
-    select(-c(21:174))
+# Define thresholds
+pm_thresh <- 9
+bc_thresh <- 1
+days_per_month <- 30
 
+# Automatically detect number of pm_* and bc_* columns
+n_pm <- exp_cov_df |> select(starts_with("pm_")) |> ncol()
+n_bc <- exp_cov_df |> select(starts_with("bc_")) |> ncol()
+
+months_pm <- ceiling(n_pm / days_per_month)
+months_bc <- ceiling(n_bc / days_per_month)
+
+# Compute monthly and trimester counts
+exp_cov_df <- exp_cov_df |>
+  mutate(
+    # Overall counts
+    pm_cnt = rowSums(across(starts_with("pm_")) > pm_thresh, na.rm = TRUE),
+    bc_cnt = rowSums(across(starts_with("bc_")) > bc_thresh, na.rm = TRUE)
+  )
+
+# ---- Add Monthly PM Counts ----
+for (m in seq_len(months_pm)) {
+  start <- (m - 1) * days_per_month + 1
+  end <- min(m * days_per_month, n_pm)
+  cols <- paste0("pm_", start:end)
+  exp_cov_df[[paste0("pm_", m, "month")]] <-
+    rowSums(exp_cov_df[, intersect(cols, names(exp_cov_df))] > pm_thresh, na.rm = TRUE)
+}
+
+# ---- Add Monthly BC Counts ----
+for (m in seq_len(months_bc)) {
+  start <- (m - 1) * days_per_month + 1
+  end <- min(m * days_per_month, n_bc)
+  cols <- paste0("bc_", start:end)
+  exp_cov_df[[paste0("bc_", m, "month")]] <-
+    rowSums(exp_cov_df[, intersect(cols, names(exp_cov_df))] > bc_thresh, na.rm = TRUE)
+}
+
+# ---- Add Trimester PM Counts (3 months each) ----
+for (t in seq_len(ceiling(months_pm / 3))) {
+  start_month <- (t - 1) * 3 + 1
+  end_month <- min(t * 3, months_pm)
+  month_cols <- paste0("pm_", start_month:end_month, "month")
+  exp_cov_df[[paste0("pm_trimester_", t)]] <-
+    rowSums(exp_cov_df[, intersect(month_cols, names(exp_cov_df))], na.rm = TRUE)
+}
+
+# ---- Add Trimester BC Counts (3 months each) ----
+for (t in seq_len(ceiling(months_bc / 3))) {
+  start_month <- (t - 1) * 3 + 1
+  end_month <- min(t * 3, months_bc)
+  month_cols <- paste0("bc_", start_month:end_month, "month")
+  exp_cov_df[[paste0("bc_trimester_", t)]] <-
+    rowSums(exp_cov_df[, intersect(month_cols, names(exp_cov_df))], na.rm = TRUE)
+}
+
+cols_to_drop <- 23:556
+exp_cov_df <- exp_cov_df[, -cols_to_drop, drop = FALSE]
+```
+
+#link with birth weight and calculate z-scores
+```{r}
 bw_df<- read_csv("~/Documents/air_polln_metabolomics/bw_df.csv") |>
   clean_names() |>
   filter(record_id %in% exp_cov_df$id) |>
@@ -53,13 +93,112 @@ med_df <- exp_cov_df |>
     sex      = recode(sex, "M" = "Male", "F" = "Female")     # optional for reporting
   ) |>
   select(-c(mean_bw, sd_bw))
+
+save(med_df, df_annotations, transposed_df,
+     file = "~/Documents/air_polln_metabolomics/analytic_dat/for_mediation.rda")
 ```
 
 #regress exposures and birth weight
 ```{r}
-x<- summary(lm(bw_z_scr ~ pm_2month +
-               race_ethnicity + education + bmi + tobacco_use_dur_preg + alcoh_use_dur_preg + maternal_age + parity
-               ,
-       data=med_df))
+x<- lm_func(
+  dependent_vars = c("bw_z_scr"),
+  independent_vars = c("pm_cnt","bc_cnt",
+                       "pm_1month","pm_2month","pm_3month","pm_4month","pm_5month","pm_6month",
+                       "pm_7month","pm_8month","pm_9month",
+                       "bc_1month","bc_2month","bc_3month","bc_4month","bc_5month","bc_6month",
+                       "bc_7month","bc_8month","bc_9month",
+                       "pm_trimester_1","pm_trimester_2","pm_trimester_3","bc_trimester_1","bc_trimester_2","bc_trimester_3"),
+  covariates = c("race_ethnicity", "education", "tobacco_use_dur_preg", "parity", "bmi",
+                 "maternal_age"),
+  data = med_df
+  )
+
+write_csv(x, "~/Documents/air_polln_metabolomics/result/lm_bw_zscr.csv")
 ```
+
+#visualize results
+```{r}
+df <- read_csv("~/Documents/air_polln_metabolomics/result/lm_bw_zscr.csv") |>
+  mutate(
+    period_type = case_when(
+      str_detect(independent_variable, "trimester") ~ "Trimester",
+      str_detect(independent_variable, "month") ~ "Month",
+      TRUE ~ "Overall"
+    ),
+    exposure_period = case_when(
+      str_detect(independent_variable, "trimester") ~ str_extract(independent_variable, "(?<=trimester_)\\d+"),
+      str_detect(independent_variable, "month") ~ str_extract(independent_variable, "(?<=_)\\d+(?=month)"),
+      TRUE ~ "overall"
+    ),
+    exposure_period = factor(exposure_period, 
+                            levels = c("overall", "1", "2", "3", "4", "5", "6", "7", "8", "9")),
+    exposure = str_sub(independent_variable, 1, 2),
+    exposure = recode(exposure,
+                      "pm" = "PM2.5",
+                      "bc" = "Black carbon"),
+    sex_level = recode(sex_level, "all" = "All"),
+    sex_level = factor(sex_level, levels = c("All", "Female", "Male"))
+  )
+
+# Filter to only months (or only trimesters)
+df_filtered <- df %>% filter(period_type == "Month")
+
+
+ggplot(df_filtered, aes(x = exposure_period, y = coefficient, colour = sex_level)) +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "black") +
+  geom_point(position = position_dodge(width = 0.6), size = 3) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                width = 0.2,
+                position = position_dodge(width = 0.6)) +
+  facet_grid(exposure ~ ., scales = "free") +
+  scale_color_manual(
+    values = c("All" = "gray50", "Female" = "green4", "Male" = "blue"),
+    breaks = c("All", "Female", "Male"),
+    drop = FALSE
+  ) +
+  guides(colour = guide_legend(override.aes = list(size = 3))) +
+  labs(x = "Gestational exposure month", y = expression(beta ~ "birth weight z-score"), colour = "Sex") +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.text = element_text(size = 12, color = "black"),
+    axis.title = element_text(size = 12, color = "black"),
+    legend.text = element_text(size = 12, color = "black"),
+    legend.title = element_text(size = 12, color = "black"),
+    strip.text = element_text(size = 14, color = "black")
+  )
+
+ggsave("~/Documents/air_polln_metabolomics/result/lm_bw_zscr_month.tiff", 
+       width = 8, height = 5,
+       dpi = 300, bg = "white")
+```
+
+#multiple mediation analysis
+```{r}
+load("~/Documents/air_polln_metabolomics/analytic_dat/for_mediation.rda")
+
+#clean data for analysis
+metabolome_df <- transposed_df |>
+  column_to_rownames("chem_id") |>  # make chem_id the row names first
+  t() |>                           # transpose
+  as.data.frame() |>               # convert to data frame
+  tibble::rownames_to_column("parent_sample_name") |> # keep original column names as a variable
+  filter(parent_sample_name %in% med_df$parent_sample_name) # keep only samples in med_df
+
+#final data for analysis
+analysis_df <- med_df |>
+  left_join(metabolome_df, by = "parent_sample_name") |>
+  drop_na()
+
+HIMA::classicHIMA(
+  X = as.numeric(analysis_df$pm_2month),
+  Y = as.numeric(analysis_df$bw_z_scr),
+  M = as.matrix(analysis_df[54:960]),
+  M.type = c("gaussian"),
+  penalty = c("SCAD"),
+  Bonfcut = 0.2
+  )
+
+```
+
 

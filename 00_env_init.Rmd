@@ -7,9 +7,9 @@ output: pdf_document
 
 ```{r}
 library(pacman)
-p_load(tidyverse, janitor, viridis, gridExtra, grid, lattice, ggh4x, UpSetR, parallel, doParallel, raster)
+p_load(tidyverse, janitor, viridis, gridExtra, grid, lattice, ggh4x, UpSetR, HIMA)
        
-       #parallel, doParallel)
+       #, parallel, doParallel, raster)
 ```
 
 ```{r}
