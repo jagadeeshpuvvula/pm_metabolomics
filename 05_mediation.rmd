@@ -188,17 +188,50 @@ metabolome_df <- transposed_df |>
 #final data for analysis
 analysis_df <- med_df |>
   left_join(metabolome_df, by = "parent_sample_name") |>
-  drop_na()
+  drop_na() |>
+  filter(gender == "Female")
 
-HIMA::classicHIMA(
-  X = as.numeric(analysis_df$pm_2month),
-  Y = as.numeric(analysis_df$bw_z_scr),
-  M = as.matrix(analysis_df[54:960]),
-  M.type = c("gaussian"),
-  penalty = c("SCAD"),
-  Bonfcut = 0.2
-  )
+library(HIMA)
 
+M_matrix <- apply(analysis_df[, 54:960], 2, as.numeric)
+X_numeric <- as.numeric(analysis_df$pm_9month)
+Y_numeric <- as.numeric(analysis_df$bw_z_scr)
+
+# Select the covariate columns
+covariate_cols <- c("race_ethnicity", "education", "tobacco_use_dur_preg", 
+                    "parity", "bmi", "maternal_age")
+
+covariate_cols <- c("tobacco_use_dur_preg", "bmi")
+
+# Create covariate matrix with dummy variables for factors
+COV_XM <- model.matrix(~ . - 1, data = analysis_df[, covariate_cols])
+
+# Optional: Check data structure (can comment out after verification)
+print(paste("Sample size:", length(X_numeric)))
+print(paste("Number of mediators:", ncol(M_matrix)))
+print(paste("X range:", min(X_numeric), "to", max(X_numeric)))
+print(paste("Y range:", min(Y_numeric), "to", max(Y_numeric)))
+
+# Run HIMA classic mediation analysis
+classicHima.fit <- hima_classic(
+    X = as.matrix(X_numeric),
+    Y = Y_numeric,
+    M = M_matrix,
+    COV.XM = COV_XM,
+    COV.MY = COV_XM,
+    M.type = c("gaussian"),
+    penalty = "SCAD",
+    Bonfcut = 0.2,
+    Y.type = "continuous",
+    scale = TRUE, 
+    verbose = TRUE,
+    parallel = TRUE,
+    ncore = 10
+)
 ```
 
+#calculate the total effect
+```{r}
+summary(lm(bw_z_scr ~ pm_2month + tobacco_use_dur_preg + bmi, data = analysis_df))
+```
 
