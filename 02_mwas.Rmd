@@ -70,116 +70,81 @@ save(exp_cov_df, transposed_df, df_annotations,
 #MWAS
 ```{r}
 load("~/Documents/air_polln_metabolomics/analytic_dat/df_metabolome_analysis.rda")
+exp_cov_df<- exp_cov_df |>
+  rename(participant_id = parent_sample_name)
+```
 
+#monthly air pollution anomalies
+```{r}
+# Define thresholds
+pm_thresh <- 9
+bc_thresh <- 1
+days_per_month <- 30
+
+# Automatically detect number of pm_* and bc_* columns
+n_pm <- exp_cov_df |> select(starts_with("pm_")) |> ncol()
+n_bc <- exp_cov_df |> select(starts_with("bc_")) |> ncol()
+
+months_pm <- ceiling(n_pm / days_per_month)
+months_bc <- ceiling(n_bc / days_per_month)
+
+# Compute monthly and trimester counts
 exp_cov_df <- exp_cov_df |>
-    rowwise() |>
-    mutate(
-        # Overall counts (existing logic)
-        pm_cnt = sum(if_else(c_across(starts_with("pm")) > 15, 1L, 0L, missing = 0L)),
-        bc_cnt = sum(if_else(c_across(starts_with("bc")) > 1, 1L, 0L, missing = 0L)),
-        
-        # Monthly PM counts (assuming pm_1 to pm_30 is month 1, pm_31 to pm_60 is month 2, etc.)
-        pm_1month = sum(if_else(c_across(pm_1:pm_30) > 15, 1L, 0L, missing = 0L)),
-        pm_2month = sum(if_else(c_across(pm_31:pm_60) > 15, 1L, 0L, missing = 0L)),
-        pm_3month = sum(if_else(c_across(pm_61:pm_77) > 15, 1L, 0L, missing = 0L)),
-        # Add more months as needed: pm_4month, pm_5month, etc.
-        
-        # Monthly BC counts
-        bc_1month = sum(if_else(c_across(bc_1:bc_30) > 1, 1L, 0L, missing = 0L)),
-        bc_2month = sum(if_else(c_across(bc_31:bc_60) > 1, 1L, 0L, missing = 0L)),
-        bc_3month = sum(if_else(c_across(bc_61:bc_77) > 1, 1L, 0L, missing = 0L))
-        # Add more months as needed: bc_4month, bc_5month, etc.
-    ) |>
-    ungroup() |>
-    select(-c(21:174))
-```
-
-#MWAS - loop
-```{r}
-# Full population
-mwas_lm_loop(
-  feature_table = transposed_df, 
-  exp_cov_data = exp_cov_df,
-  exposures = names(exp_cov_df)[21:28],
-  covar = c("race_ethnicity", "education", "bmi", "parity",
-            "ga_at_delivery", "tobacco_use_dur_preg", 
-            "alcoh_use_dur_preg", "gender"), 
-  output_folder = "~/Documents/air_polln_metabolomics/result/lm_mwas",
-  mwas_file_name = "placenta_mwas_june_2025.csv",
-  fdr_cutoff = 0.2
+  mutate(
+    # Overall counts
+    pm_cnt = rowSums(across(starts_with("pm_")) > pm_thresh, na.rm = TRUE),
+    bc_cnt = rowSums(across(starts_with("bc_")) > bc_thresh, na.rm = TRUE)
   )
 
-# Subset by gender
-exp_cov_df_male <- exp_cov_df |> filter(gender == "Male")
-exp_cov_df_female <- exp_cov_df |> filter(gender == "Female")
+# ---- Add Monthly PM Counts ----
+for (m in seq_len(months_pm)) {
+  start <- (m - 1) * days_per_month + 1
+  end <- min(m * days_per_month, n_pm)
+  cols <- paste0("pm_", start:end)
+  exp_cov_df[[paste0("pm_", m, "month")]] <-
+    rowSums(exp_cov_df[, intersect(cols, names(exp_cov_df))] > pm_thresh, na.rm = TRUE)
+}
 
-# Subset transposed_df by keeping only 'chem_id' and the appropriate sample columns
-transposed_df_male <- transposed_df |>
-  select(chem_id, all_of(exp_cov_df_male$parent_sample_name))
+# ---- Add Monthly BC Counts ----
+for (m in seq_len(months_bc)) {
+  start <- (m - 1) * days_per_month + 1
+  end <- min(m * days_per_month, n_bc)
+  cols <- paste0("bc_", start:end)
+  exp_cov_df[[paste0("bc_", m, "month")]] <-
+    rowSums(exp_cov_df[, intersect(cols, names(exp_cov_df))] > bc_thresh, na.rm = TRUE)
+}
 
-transposed_df_female <- transposed_df |>
-  select(chem_id, all_of(exp_cov_df_female$parent_sample_name))
+# ---- Add Trimester PM Counts (3 months each) ----
+for (t in seq_len(ceiling(months_pm / 3))) {
+  start_month <- (t - 1) * 3 + 1
+  end_month <- min(t * 3, months_pm)
+  month_cols <- paste0("pm_", start_month:end_month, "month")
+  exp_cov_df[[paste0("pm_trimester_", t)]] <-
+    rowSums(exp_cov_df[, intersect(month_cols, names(exp_cov_df))], na.rm = TRUE)
+}
 
-# Male only
-mwas_lm_loop(
-  feature_table = transposed_df_male, 
-  exp_cov_data = exp_cov_df_male,
-  exposures = names(exp_cov_df_male)[21:28],
-  covar = c("race_ethnicity", "education", "bmi", "parity",
-            "ga_at_delivery", "tobacco_use_dur_preg", 
-            "alcoh_use_dur_preg"), 
-  output_folder = "~/Documents/air_polln_metabolomics/result/lm_mwas",
-  mwas_file_name = "placenta_mwas_june_2025_male.csv",
-  fdr_cutoff = 0.2
-  )
+# ---- Add Trimester BC Counts (3 months each) ----
+for (t in seq_len(ceiling(months_bc / 3))) {
+  start_month <- (t - 1) * 3 + 1
+  end_month <- min(t * 3, months_bc)
+  month_cols <- paste0("bc_", start_month:end_month, "month")
+  exp_cov_df[[paste0("bc_trimester_", t)]] <-
+    rowSums(exp_cov_df[, intersect(month_cols, names(exp_cov_df))], na.rm = TRUE)
+}
 
-# Female only
-mwas_lm_loop(
-  feature_table = transposed_df_female, 
-  exp_cov_data = exp_cov_df_female,
-  exposures = names(exp_cov_df_female)[21:28],
-  covar = c("race_ethnicity", "education", "bmi", "parity",
-            "ga_at_delivery", "tobacco_use_dur_preg", 
-            "alcoh_use_dur_preg"), 
-  output_folder = "~/Documents/air_polln_metabolomics/result/lm_mwas",
-  mwas_file_name = "placenta_mwas_june_2025_female.csv",
-  fdr_cutoff = 0.2
-  )
-
+cols_to_drop <- 23:556
+exp_cov_df <- exp_cov_df[, -cols_to_drop, drop = FALSE]
 ```
 
-
-#load mwas results
+#exposure trends 
 ```{r}
-#beta_dir variable is based on 20% FDR cutoff
-res_all<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_june_2025.csv") |> mutate(sex = "all")
-res_m<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_june_2025_male.csv") |> mutate(sex = "male")
-res_f<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_june_2025_female.csv") |> mutate(sex = "female")
-
-mwas_res<- bind_rows(res_all, res_m, res_f) |>
-  clean_names() |>
-  left_join(
-    df_annotations |>
-      select(1, 5, 6, 11, 19), 
-    by = "chem_id"
-  ) 
-
-write_csv(mwas_res, "~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv")
-```
-
-#summary of results
-```{r}
-res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv") |>
-  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$"))
-
-summary_df <- res_df |>
-  filter(fdr < 0.2) |>
-  group_by(variable, super_pathway, sub_pathway, beta_dir, sex) |>
-  summarise(
-    count = n(),
-    chemical_names = paste(unique(chemical_name), collapse = ", "),
-    .groups = "drop"
-  ) |>
+exp_viz_summary <- exp_cov_df %>%
+  select(c(1, 25:42)) %>%
+  pivot_longer(
+    cols = -participant_id,
+    names_to = "variable",
+    values_to = "anomaly_days"
+  ) %>%
   mutate(
     exposure = case_when(
       str_starts(variable, "bc") ~ "Black carbon",
@@ -187,13 +152,156 @@ summary_df <- res_df |>
       TRUE ~ NA_character_
     ),
     exposure_window = case_when(
-    str_ends(variable, "cnt") ~ "Overall",
-    str_ends(variable, "1month") ~ "7 month",
-    str_ends(variable, "2month") ~ "8 month",
-    str_ends(variable, "3month") ~ "9 month",
-    TRUE ~ NA_character_
-  ),
-  exposure_window = factor(exposure_window, levels = c("Overall", "7 month", "8 month", "9 month")),
+      str_ends(variable, "1month") ~ "1 month",
+      str_ends(variable, "2month") ~ "2 month",
+      str_ends(variable, "3month") ~ "3 month",
+      str_ends(variable, "4month") ~ "4 month",
+      str_ends(variable, "5month") ~ "5 month",
+      str_ends(variable, "6month") ~ "6 month",
+      str_ends(variable, "7month") ~ "7 month",
+      str_ends(variable, "8month") ~ "8 month",
+      str_ends(variable, "9month") ~ "9 month",
+      TRUE ~ NA_character_
+    ),
+    exposure_window = factor(
+      exposure_window,
+      levels = c("1 month", "2 month", "3 month",
+                 "4 month", "5 month", "6 month",
+                 "7 month", "8 month", "9 month")
+    )
+  ) %>%
+  group_by(exposure_window, exposure) %>%
+  summarise(
+    q25 = quantile(anomaly_days, 0.25, na.rm = TRUE),
+    median = median(anomaly_days, na.rm = TRUE),
+    q75 = quantile(anomaly_days, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(stat = paste0(median, " (", q25, ", ", q75, ")")) %>%
+  select(exposure_window, exposure, stat) %>%
+  pivot_wider(
+    names_from = exposure,
+    values_from = stat
+  )
+
+write_csv(exp_viz_summary, "~/Documents/air_polln_metabolomics/result/lm_mwas/exposure_summary_tbl.csv")
+```
+
+#scatter plot pm2.5 and bw z-score (use data from file 05_mediation)
+```{r}
+load("~/Documents/air_polln_metabolomics/analytic_dat/for_mediation.rda")
+
+sctr_viz<- med_df |>
+  select(c(25:42,50,53)) |>
+  pivot_longer(
+    cols = c(1:18),
+    names_to = "variable",
+    values_to = "anomaly_days"
+  ) %>%
+  mutate(
+    exposure = case_when(
+      str_starts(variable, "bc") ~ "Black carbon",
+      str_starts(variable, "pm") ~ "PM2.5",
+      TRUE ~ NA_character_
+    ),
+    exposure_window = case_when(
+      str_ends(variable, "1month") ~ "1 month",
+      str_ends(variable, "2month") ~ "2 month",
+      str_ends(variable, "3month") ~ "3 month",
+      str_ends(variable, "4month") ~ "4 month",
+      str_ends(variable, "5month") ~ "5 month",
+      str_ends(variable, "6month") ~ "6 month",
+      str_ends(variable, "7month") ~ "7 month",
+      str_ends(variable, "8month") ~ "8 month",
+      str_ends(variable, "9month") ~ "9 month",
+      TRUE ~ NA_character_
+    ),
+    exposure_window = factor(
+      exposure_window,
+      levels = c("1 month", "2 month", "3 month",
+                 "4 month", "5 month", "6 month",
+                 "7 month", "8 month", "9 month")
+    )
+  )
+
+ggplot(sctr_viz, aes(x = anomaly_days, y = bw_z_scr, color = sex)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm",  se=F) +
+  facet_grid(exposure ~ exposure_window, scale= "free") +
+  theme_minimal() +
+  scale_color_manual(values = c("Male" = "darkblue", "Female" = "darkred")) +
+  labs(
+    x = "Count of days with high air pollutant exposures",     
+    y = "Birth weight Z-Score"        
+  )+
+  theme(legend.position = "bottom")
+
+ggsave("~/Documents/air_polln_metabolomics/result/exposure_bw_zscore_scatter.tiff",
+       dpi=300,
+       bg="white",
+       width = 10,
+       height = 5)
+```
+
+
+#MWAS - loop
+```{r}
+# Full population
+mwas_lm_loop(
+  feature_table = transposed_df, 
+  exp_cov_data = exp_cov_df,
+  exposures = names(exp_cov_df)[25:42],
+  covar = c("race_ethnicity", "education", "bmi", "parity",
+            "ga_at_delivery", "tobacco_use_dur_preg", 
+            "alcoh_use_dur_preg", "gender"), 
+  output_folder = "~/Documents/air_polln_metabolomics/result/lm_mwas",
+  mwas_file_name = "placenta_mwas_oct_2025.csv",
+  fdr_cutoff = 0.2,
+  sex_var = "gender", analyze_by_sex = TRUE,
+  participant_id_col = "participant_id"
+  )
+```
+
+#add metabolite annotations to mwas results
+```{r}
+res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025.csv") |>
+  left_join(df_annotations |> select(c(1,11,5,6,16:19)), by= "chem_id")
+
+write_csv(res_df, "~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv")
+```
+
+#summary of results
+```{r}
+res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
+  select(-c(9)) |>
+  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$")) |>
+  clean_names() |>
+  filter(fdr<0.2) |>
+  mutate(across(where(is.character), as.factor))|>
+  mutate(
+    exposure = case_when(
+      str_starts(variable, "bc") ~ "Black carbon",
+      str_starts(variable, "pm") ~ "PM2.5",
+      TRUE ~ NA_character_
+    ),
+    exposure_window = case_when(
+      str_ends(variable, "1month") ~ "1 month",
+      str_ends(variable, "2month") ~ "2 month",
+      str_ends(variable, "3month") ~ "3 month",
+      str_ends(variable, "4month") ~ "4 month",
+      str_ends(variable, "5month") ~ "5 month",
+      str_ends(variable, "6month") ~ "6 month",
+      str_ends(variable, "7month") ~ "7 month",
+      str_ends(variable, "8month") ~ "8 month",
+      str_ends(variable, "9month") ~ "9 month",
+      TRUE ~ NA_character_
+      ),
+    exposure_window = factor(
+      exposure_window,
+      levels = c("1 month", "2 month", "3 month",
+                 "4 month", "5 month", "6 month",
+                 "7 month", "8 month", "9 month")
+      ),
   super_pathway = recode(super_pathway, 
                            "Partially Characterized Molecules" = "Other",
                            "Energy" = "Other"),
@@ -206,10 +314,21 @@ summary_df <- res_df |>
                                "Nucleotide", 
                                "Xenobiotics",
                                "Other"),
-  sex = case_match(sex,
-                   "all" ~ "Overall", "male" ~ "Male", "female" ~ "Female", .default = sex),
-  sex = factor(sex, levels = c("Overall", "Male", "Female"))
+  sex = factor(sex, levels = c("overall", "Male", "Female"))
   ) 
+
+#summary of MWAS results
+summary_df <- res_df |>
+  group_by(exposure, sex, super_pathway, sub_pathway) |>
+  summarise(
+    distinct_exposure_windows = n_distinct(exposure_window),
+    exposure_windows = paste(unique(exposure_window), collapse = ", ") |> str_replace_all("\\s+month", ""),
+    metabolite_count = n(),
+    metabolites = paste(unique(chemical_name), collapse = ", "),
+    .groups = "drop"
+  ) |>
+  filter(exposure_windows > 1,
+         metabolite_count > 2)
 ```
 
 #visualizing results - Summarized heat map
@@ -257,7 +376,7 @@ ggsave("~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_pathway.tiff",
 create_pathway_plot <- function(data, pathway) {
   subset_data <- data %>% 
     filter(super_pathway == pathway) |>
-    filter(str_starts(variable, "bc"))
+    filter(str_starts(variable, "pm"))
   
   ggplot(subset_data, aes(x = estimate, y = sub_pathway)) +
     # Non-significant points first (gray, transparent)
@@ -295,7 +414,7 @@ while(dev.cur() > 1) dev.off()
 
 # Open the TIFF device
 tiff(
-  filename = "~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_lm_summmary_bc.tiff",
+  filename = "~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_lm_summmary_pm.tiff",
   width = 14,
   height = 12,
   units = "in",
@@ -334,7 +453,8 @@ dev.off()
 #Metabolie level plot
 #load mwas results
 ```{r}
-res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv")
+res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
+  clean_names()
 
 #summary of results
 summary_df2 <- res_df |>
@@ -345,25 +465,30 @@ summary_df2 <- res_df |>
   filter(!is.na(prefix)) |>
   group_by(chemical_name, super_pathway, sub_pathway, prefix, sex) |>
   summarise(count = n(), .groups = "drop") |>
-  filter(count > 1)
+  filter(count > 4)
 
 viz_df<- res_df |>
   filter(chemical_name %in% summary_df2$chemical_name,
          fdr < 0.2) |>
   mutate(
+    chemical_name = str_to_title(chemical_name),
     exposure = case_when(
       str_starts(variable, "bc") ~ "Black carbon",
       str_starts(variable, "pm") ~ "PM2.5",
       TRUE ~ NA_character_
     ),
-    exposure_window = case_when(
-    str_ends(variable, "cnt") ~ "Overall",
-    str_ends(variable, "1month") ~ "7 month",
-    str_ends(variable, "2month") ~ "8 month",
-    str_ends(variable, "3month") ~ "9 month",
-    TRUE ~ NA_character_
-  ),
-  exposure_window = factor(exposure_window, levels = c("Overall", "7 month", "8 month", "9 month")),
+     exposure_window = case_when(
+      str_ends(variable, "1month") ~ "1 month",
+      str_ends(variable, "2month") ~ "2 month",
+      str_ends(variable, "3month") ~ "3 month",
+      str_ends(variable, "4month") ~ "4 month",
+      str_ends(variable, "5month") ~ "5 month",
+      str_ends(variable, "6month") ~ "6 month",
+      str_ends(variable, "7month") ~ "7 month",
+      str_ends(variable, "8month") ~ "8 month",
+      str_ends(variable, "9month") ~ "9 month",
+      TRUE ~ NA_character_
+      ),
   super_pathway = recode(super_pathway, 
                            "Partially Characterized Molecules" = "Other",
                            "Energy" = "Other"),
@@ -377,7 +502,7 @@ viz_df<- res_df |>
                                "Xenobiotics",
                                "Other"),
   sex = case_match(sex,
-                   "all" ~ "Overall", "male" ~ "Male", "female" ~ "Female", .default = sex),
+                   "overall" ~ "Overall", "Male" ~ "Male", "Female" ~ "Female", .default = sex),
   sex = factor(sex, levels = c("Overall", "Male", "Female"))
   ) 
 ```
@@ -392,17 +517,17 @@ ggplot(viz_df, aes(x = exposure_window, y = chemical_name, fill = estimate)) +
   midpoint = 0,
   name = "Estimate"
 ) +
-  labs(x = "Fine particulate matter exposure during third trimester", y = "Metabolite") +
-  facet_nested(super_pathway ~ exposure + sex,
+  labs(x = "Gesational fine particulate matter exposure", y = "Metabolite") +
+  ggh4x::facet_nested(super_pathway ~ exposure + sex,
                scales = "free",
                space = "free",
                switch = "both",
                labeller = label_wrap_gen(width = 15))  +
   theme_minimal()  +
-  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, color="black"),
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0, color="black"),
         axis.text.y = element_text(size=9.5, color="black"),
         legend.position = "bottom",
-        legend.text = element_text(angle = 45, hjust = 1, color="black"),
+        legend.text = element_text(angle = 0, hjust = 1, color="black"),
         legend.title = element_text(vjust = 1),
         legend.key.height = unit(0.3, "cm"),
         panel.grid.major.x = element_blank(), 
@@ -410,21 +535,26 @@ ggplot(viz_df, aes(x = exposure_window, y = chemical_name, fill = estimate)) +
         strip.text.y = element_text(size=0, angle = 45, hjust = 0, color="black"),
         strip.text.x = element_text(size=11, color="black"),
         strip.placement = "outside", 
-        strip.background = element_blank() )
+        strip.background = element_blank())
 ```
 
 ```{r}
-ggsave("~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_metabolite.tiff",
-       dpi=300,
-       bg="white",
-       width = 11,
-       height = 12)
+tiff(
+  "~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_metabolite.tiff",
+  width = 11, 
+  height = 14, 
+  units = "in", 
+  res = 300, 
+  bg = "white"
+)
+print(p)
+dev.off()
 ```
 
 #export data for python - to produce sankey plot
 ```{r}
-res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv") |>
-  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$"))
+res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
+  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$")) |> clean_names()
 
 summary_df <- res_df |>
   filter(fdr < 0.2) |>
@@ -446,7 +576,7 @@ summary_df <- res_df |>
                                "Nucleotide", 
                                "Xenobiotics",
                                "Other")
-  ) |> select(c(9:12,14)) |>
+  ) |> select(exposure, super_pathway, sub_pathway, chemical_name) |>
   group_by(exposure, super_pathway, sub_pathway) |>
   summarise(
     n_chem = n_distinct(chemical_name),
@@ -458,24 +588,34 @@ write_csv(summary_df, "~/Documents/air_polln_metabolomics/result/lm_mwas/sankey_
 
 #upset - overlap plot
 ```{r}
-res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv") |>
+res_df <- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
+  clean_names() |>
   mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$")) |>
-  filter(fdr < 0.2)  |>
+  filter(fdr < 0.2) |>
   mutate(
     exposure = case_when(
-      str_starts(variable, "bc_cnt") ~ "Black carbon - Overall",
-      str_starts(variable, "bc_1month") ~ "Black carbon - 7 month",
-      str_starts(variable, "bc_2month") ~ "Black carbon - 8 month",
-      
-      str_starts(variable, "pm_cnt") ~ "PM2.5 - Overall",
-      str_starts(variable, "pm_1month") ~ "PM2.5 - 7 month",
-      str_starts(variable, "pm_2month") ~ "PM2.5 - 8 month",
-      str_starts(variable, "pm_3month") ~ "PM2.5 - 9 month",
+      str_starts(variable, "bc_1month") ~ "BC-1m",
+      str_starts(variable, "bc_2month") ~ "BC-2m",
+      str_starts(variable, "bc_3month") ~ "BC-3m",
+      str_starts(variable, "bc_4month") ~ "BC-4m",
+      str_starts(variable, "bc_5month") ~ "BC-5m",
+      str_starts(variable, "bc_6month") ~ "BC-6m",
+      str_starts(variable, "bc_7month") ~ "BC-7m",
+      str_starts(variable, "bc_8month") ~ "BC-8m",
+      str_starts(variable, "bc_9month") ~ "BC-9m",
+      str_starts(variable, "pm_1month") ~ "PM-1m",
+      str_starts(variable, "pm_2month") ~ "PM-2m",
+      str_starts(variable, "pm_3month") ~ "PM-3m",
+      str_starts(variable, "pm_4month") ~ "PM-4m",
+      str_starts(variable, "pm_5month") ~ "PM-5m",
+      str_starts(variable, "pm_6month") ~ "PM-6m",
+      str_starts(variable, "pm_7month") ~ "PM-7m",
+      str_starts(variable, "pm_8month") ~ "PM-8m",
+      str_starts(variable, "pm_9month") ~ "PM-9m",
       TRUE ~ NA_character_
     ),
     exposure_sex = paste(exposure, sex, sep = "-")
-    ) |>
-  select(c(12,15))
+  )
 
 # Step 1: Convert to wide format
 wide_df <- res_df |>
@@ -484,66 +624,83 @@ wide_df <- res_df |>
   pivot_wider(names_from = exposure_sex, values_from = value, values_fill = 0) |>
   as.data.frame()
 
-# 1. Define custom column order
+# Custom column order with abbreviated labels
 custom_order <- c(
-  "Black carbon - Overall-all",
-  "Black carbon - 7 month-all",
-  "Black carbon - 8 month-all",
-  "Black carbon - Overall-male",
-  "Black carbon - 7 month-male",
-  
-  "PM2.5 - Overall-all",
-  "PM2.5 - 7 month-all",
-  "PM2.5 - 8 month-all",
-  "PM2.5 - Overall-male",
-  "PM2.5 - 7 month-male",
-  "PM2.5 - 8 month-male",
-  
-  "PM2.5 - 8 month-female",
-  "PM2.5 - 9 month-female"
+  "PM-1m-overall",
+  "PM-2m-overall",
+  "PM-3m-overall",
+  "PM-4m-overall",
+  "PM-5m-overall",
+  "PM-6m-overall",
+  "PM-7m-overall",
+  "PM-8m-overall",
+  "PM-9m-overall",
+  "BC-2m-overall",
+  "BC-3m-overall",
+  "BC-4m-overall",
+  "BC-5m-overall",
+  "BC-6m-overall",
+  "BC-7m-overall",
+  "BC-8m-overall",
+  "PM-1m-Female",
+  "PM-2m-Female",
+  "PM-3m-Female",
+  "PM-5m-Female",
+  "PM-6m-Female",
+  "PM-8m-Female",
+  "BC-2m-Female",
+  "BC-3m-Female",
+  "BC-4m-Female",
+  "BC-5m-Female",
+  "BC-6m-Female",
+  "PM-1m-Male",
+  "PM-2m-Male",
+  "PM-4m-Male",
+  "PM-7m-Male",
+  "BC-2m-Male",
+  "BC-6m-Male",
+  "BC-7m-Male",
+  "BC-8m-Male"
 )
 
-# 2. Filter to just the columns present and reorder
+# Filter and reorder columns
 present_order <- custom_order[custom_order %in% names(wide_df)]
 wide_df_ordered <- wide_df[, present_order]
 
-# 3. Create a matching color vector for the sets (optional)
-set_colors <- c(
-  rep("#E69F00", 5),  # Black carbon
-  rep("#0072B2", 8)   # PM2.5
+# Color vector for sets - must match length of present_order
+set_colors <- ifelse(
+  grepl("^PM", present_order),
+  "#0072B2",  # Blue for PM2.5
+  "#E69F00"   # Orange for Black carbon
 )
 
-# Try opening TIFF graphics device
+# Open TIFF with larger dimensions
 tiff_file <- "~/Documents/air_polln_metabolomics/result/lm_mwas/upset_plot.tiff"
 
 tiff(filename = tiff_file,
-     width = 7,
-     height = 8,
+     width = 17,
+     height = 16,
      units = "in",
      res = 300)
 
-# Confirm device is open
-if (dev.cur() == 1) stop("TIFF device did not open. Check file path and permissions.")
-
-# Plot
+# Plot with adjusted parameters
 upset(wide_df_ordered,
       sets = present_order,
       keep.order = TRUE,
       nsets = length(present_order),
       nintersects = 30,
-      set_size.scale_max = 200,
-      sets.bar.color = set_colors[1:length(present_order)],
+      set_size.scale_max = 250,
+      sets.bar.color = set_colors,
       set_size.show = TRUE,
-      text.scale = 1.3,
-      point.size = 3,
-      line.size = 1,
-      mainbar.y.label = "No. of overlapping metabolites\nassociated with \ngestational air pollutant exposures",
-      sets.x.label = "Metabolites\nby exposure & sex",
+      text.scale = c(1.5, 1.2, 1.3, 1.2, 1.5),  # c(intersection size, set size, set names, numbers above bars, axis labels)
+      point.size = 4,
+      line.size = 1.2,
+      mainbar.y.label = "No. of overlapping metabolites\nassociated with gestational\nair pollutant exposures",
+      sets.x.label = "Metabolites by exposure & sex",
       mainbar.y.max = NULL)
 
-# Close device only if open
+# Close device
 if (dev.cur() > 1) dev.off()
-
 ```
 
 
@@ -565,8 +722,8 @@ table_s1 <- tibble::tribble(
   "Other", 0, 140
 )
 
-res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_anno.csv") |>
-  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$"))
+res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
+  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$")) |> clean_names()
 
 summary_df<- res_df |>
   filter(fdr < 0.2)  |>
@@ -576,7 +733,7 @@ summary_df<- res_df |>
       str_starts(variable, "pm") ~ "PM2.5",
       TRUE ~ NA_character_
     )) |> 
-  select(c(14,10,11,12,9)) |>
+  #select(c(14,10,11,12,9)) |>
   distinct()  |>
   group_by(exposure, super_pathway, sex) |>
   summarise(
@@ -630,7 +787,7 @@ x <- res_df |>
                                "Nucleotide", 
                                "Xenobiotics",
                                "Other")
-  ) |> select(c(9:12,14,15)) |>
+  )  |>
   filter(sub_pathway =="Lysine",
          exposure == "Black carbon",
          sex == "male") |>
@@ -640,8 +797,6 @@ x <- res_df |>
 
 chem_list <- str_split(x, ",\\s*") |> unlist()
 
-load("~/Documents/air_polln_metabolomics/analytic_dat/df_metabolome_analysis.rda")
-rm(exp_cov_df, transposed_df)
 
 #Get compound IDs
 kegg_list <- df_annotations |> 
