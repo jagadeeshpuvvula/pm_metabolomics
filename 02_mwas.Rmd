@@ -191,10 +191,24 @@ write_csv(exp_viz_summary, "~/Documents/air_polln_metabolomics/result/lm_mwas/ex
 ```{r}
 load("~/Documents/air_polln_metabolomics/analytic_dat/for_mediation.rda")
 
-sctr_viz<- med_df |>
-  select(c(25:42,50,53)) |>
+library(tidyverse)
+
+# Step 1: Create sctr_viz with proper pivoting
+sctr_viz <- med_df %>%
+  select(
+    # Fixed variables (ID and outcome)
+    id, sex, bw_z_scr,
+    # Confounders
+    race_ethnicity, education, bmi, parity, ga_at_delivery, 
+    tobacco_use_dur_preg, alcoh_use_dur_preg,
+    # Exposure variables to pivot
+    pm_1month, pm_2month, pm_3month, pm_4month, pm_5month, 
+    pm_6month, pm_7month, pm_8month, pm_9month,
+    bc_1month, bc_2month, bc_3month, bc_4month, bc_5month, 
+    bc_6month, bc_7month, bc_8month, bc_9month
+  ) %>%
   pivot_longer(
-    cols = c(1:18),
+    cols = starts_with("pm") | starts_with("bc"),
     names_to = "variable",
     values_to = "anomaly_days"
   ) %>%
@@ -224,19 +238,47 @@ sctr_viz<- med_df |>
     )
   )
 
-ggplot(sctr_viz, aes(x = anomaly_days, y = bw_z_scr, color = sex)) +
+# Step 2: Create partial regression plots
+# Adjust BOTH outcome and exposure for confounders separately
+adjusted_data <- sctr_viz %>%
+  nest(data = -c(exposure, exposure_window, sex)) %>%
+  mutate(
+    # Model 1: outcome adjusted for all confounders
+    outcome_model = map(data, ~lm(bw_z_scr ~ race_ethnicity + education + bmi + parity + 
+                                    ga_at_delivery + tobacco_use_dur_preg + alcoh_use_dur_preg, 
+                                   data = .x)),
+    # Model 2: exposure adjusted for all confounders
+    exposure_model = map(data, ~lm(anomaly_days ~ race_ethnicity + education + bmi + parity + 
+                                    ga_at_delivery + tobacco_use_dur_preg + alcoh_use_dur_preg, 
+                                    data = .x)),
+    # Extract residuals from both models
+    residuals = pmap(list(data, outcome_model, exposure_model), 
+                     ~..1 %>% 
+                       mutate(
+                         outcome_resid = residuals(..2),
+                         exposure_resid = residuals(..3)
+                       ))
+  ) %>%
+  unnest(residuals) %>%
+  select(-outcome_model, -exposure_model, -data)
+
+# Step 3: Create the scatter plot with partial regression trend lines
+ggplot(adjusted_data, aes(x = exposure_resid, y = outcome_resid, color = sex)) +
   geom_point(alpha = 0.3) +
-  geom_smooth(method = "lm",  se=F) +
-  facet_grid(exposure ~ exposure_window, scale= "free") +
+  geom_smooth(method = "lm", se = FALSE, inherit.aes = TRUE) +
+  facet_grid(exposure ~ exposure_window, scales = "free") +
   theme_minimal() +
   scale_color_manual(values = c("Male" = "darkblue", "Female" = "darkred")) +
   labs(
-    x = "Count of days with high air pollutant exposures",     
-    y = "Birth weight Z-Score"        
-  )+
-  theme(legend.position = "bottom")
+    x = "Days with high air pollutant exposure",
+    y = "Birth weight Z-Score",
+    color = "Sex"
+  ) +
+  theme(legend.position = "bottom",
+        axis.title.x = element_text(size = 9),
+        axis.title.y = element_text(size = 9))
 
-ggsave("~/Documents/air_polln_metabolomics/result/exposure_bw_zscore_scatter.tiff",
+ggsave("~/Documents/air_polln_metabolomics/result/lm_mwas/pm2.5_bw_zscore_scatter.tiff",
        dpi=300,
        bg="white",
        width = 10,
@@ -458,26 +500,46 @@ res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mw
 
 #summary of results
 summary_df2 <- res_df |>
-  filter(fdr<0.2,
+  filter(fdr < 0.2,
          !str_detect(variable, "cnt$")) |>
-  mutate(prefix = ifelse(grepl("^pm_", variable), "pm_", 
-                         ifelse(grepl("^bc_", variable), "bc_", NA))) |>
-  filter(!is.na(prefix)) |>
-  group_by(chemical_name, super_pathway, sub_pathway, prefix, sex) |>
-  summarise(count = n(), .groups = "drop") |>
-  filter(count > 4)
-
-viz_df<- res_df |>
-  filter(chemical_name %in% summary_df2$chemical_name,
-         fdr < 0.2) |>
   mutate(
     chemical_name = str_to_title(chemical_name),
+    prefix = str_remove(variable, "_?\\d+month$"),
+    month_num = as.integer(str_extract(variable, "(?<=_)\\d+(?=month$)"))
+  ) |>
+  filter(!is.na(prefix), !is.na(month_num)) |>
+  arrange(chemical_name, super_pathway, sub_pathway, prefix, sex, month_num) |>
+  group_by(chemical_name, super_pathway, sub_pathway, prefix, sex) |>
+  summarise(months = list(sort(unique(month_num))), .groups = "drop") |>
+  rowwise() |>
+  mutate(
+    has_3_consecutive = {
+      m <- months
+      if (length(m) < 3) FALSE
+      else {
+        d <- diff(m)
+        # find runs of diff == 1
+        grp <- cumsum(c(0, d != 1))
+        max(rle(grp)$lengths) >= 4
+      }
+    }
+  ) |>
+  ungroup() |>
+  filter(has_3_consecutive)
+
+viz_df <- res_df |>
+  # Make sure names match the case used in summary_df2
+  mutate(chemical_name = str_to_title(chemical_name)) |>
+  # Filter by chemical names that passed the 3+ consecutive months test
+  filter(chemical_name %in% unique(summary_df2$chemical_name),
+         fdr < 0.2) |>
+  mutate(
     exposure = case_when(
       str_starts(variable, "bc") ~ "Black carbon",
       str_starts(variable, "pm") ~ "PM2.5",
       TRUE ~ NA_character_
     ),
-     exposure_window = case_when(
+    exposure_window = case_when(
       str_ends(variable, "1month") ~ "1 month",
       str_ends(variable, "2month") ~ "2 month",
       str_ends(variable, "3month") ~ "3 month",
@@ -488,27 +550,28 @@ viz_df<- res_df |>
       str_ends(variable, "8month") ~ "8 month",
       str_ends(variable, "9month") ~ "9 month",
       TRUE ~ NA_character_
-      ),
-  super_pathway = recode(super_pathway, 
-                           "Partially Characterized Molecules" = "Other",
-                           "Energy" = "Other"),
-  super_pathway = fct_relevel(super_pathway, 
-                               "Lipid", 
-                               "Amino Acid", 
-                               "Carbohydrate", 
-                               "Cofactors and Vitamins", 
-                               "Peptide", 
-                               "Nucleotide", 
-                               "Xenobiotics",
-                               "Other"),
-  sex = case_match(sex,
-                   "overall" ~ "Overall", "Male" ~ "Male", "Female" ~ "Female", .default = sex),
-  sex = factor(sex, levels = c("Overall", "Male", "Female"))
-  ) 
+    ),
+    super_pathway = recode(super_pathway,
+      "Partially Characterized Molecules" = "Other",
+      "Energy" = "Other"
+    ),
+    super_pathway = forcats::fct_relevel(
+      super_pathway,
+      "Lipid", "Amino Acid", "Carbohydrate", "Cofactors and Vitamins",
+      "Peptide", "Nucleotide", "Xenobiotics", "Other"
+    ),
+    sex = case_match(sex,
+      "overall" ~ "Overall",
+      "Male" ~ "Male",
+      "Female" ~ "Female",
+      .default = sex
+    ),
+    sex = factor(sex, levels = c("Overall", "Male", "Female"))
+  )
 ```
 
 ```{r}
-ggplot(viz_df, aes(x = exposure_window, y = chemical_name, fill = estimate)) +
+p<-ggplot(viz_df, aes(x = exposure_window, y = chemical_name, fill = estimate)) +
   geom_tile(color = "white") +
   scale_fill_gradient2(
   low = scales::muted("darkred"),
@@ -532,7 +595,7 @@ ggplot(viz_df, aes(x = exposure_window, y = chemical_name, fill = estimate)) +
         legend.key.height = unit(0.3, "cm"),
         panel.grid.major.x = element_blank(), 
         panel.grid.minor.x = element_blank(),
-        strip.text.y = element_text(size=0, angle = 45, hjust = 0, color="black"),
+        strip.text.y = element_text(size=0, angle = 45, hjust = 0.5, color="black"),
         strip.text.x = element_text(size=11, color="black"),
         strip.placement = "outside", 
         strip.background = element_blank())
