@@ -498,7 +498,10 @@ dev.off()
 res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
   clean_names()
 
-#summary of results
+# Set filter options
+filter_type <- "any"  # Change to "any" for any N windows
+n_windows <- 4  # Change to desired number of windows
+
 summary_df2 <- res_df |>
   filter(fdr < 0.2,
          !str_detect(variable, "cnt$")) |>
@@ -511,21 +514,29 @@ summary_df2 <- res_df |>
   arrange(chemical_name, super_pathway, sub_pathway, prefix, sex, month_num) |>
   group_by(chemical_name, super_pathway, sub_pathway, prefix, sex) |>
   summarise(months = list(sort(unique(month_num))), .groups = "drop") |>
-  rowwise() |>
-  mutate(
-    has_3_consecutive = {
-      m <- months
-      if (length(m) < 3) FALSE
-      else {
-        d <- diff(m)
-        # find runs of diff == 1
-        grp <- cumsum(c(0, d != 1))
-        max(rle(grp)$lengths) >= 4
-      }
+  (\(data) {
+    if (filter_type == "consecutive") {
+      data |>
+        rowwise() |>
+        mutate(
+          has_n_windows = {
+            m <- months
+            if (length(m) < n_windows) FALSE
+            else {
+              d <- diff(m)
+              grp <- cumsum(c(0, d != 1))
+              max(rle(grp)$lengths) >= n_windows
+            }
+          }
+        ) |>
+        ungroup() |>
+        filter(has_n_windows)
+    } else {
+      data |>
+        filter(lengths(months) >= n_windows) |>
+        mutate(has_n_windows = TRUE)
     }
-  ) |>
-  ungroup() |>
-  filter(has_3_consecutive)
+  })()
 
 viz_df <- res_df |>
   # Make sure names match the case used in summary_df2
@@ -613,6 +624,24 @@ tiff(
 print(p)
 dev.off()
 ```
+
+#detailed metabolism chart for specific pathways - use data from summary_df2
+```{r}
+#chemical_name includes number of temporal hits
+#sub_pathway includes number fo chemicals
+#super_pathway includes number of sub_pathways
+metab_viz <- summary_df2 |>
+  group_by(super_pathway) |>
+  mutate(super_pathway = paste0("[[", n_distinct(sub_pathway), "]]: ", super_pathway)) |>
+  group_by(super_pathway, sub_pathway) |>
+  mutate(sub_pathway = paste0("[[", n_distinct(chemical_name), "]]: ", sub_pathway)) |>
+  ungroup() |>
+  mutate(chemical_name = paste0("[[", lengths(months), "]]: ", chemical_name)) |>
+  select(1:3)
+  
+```
+
+
 
 #export data for python - to produce sankey plot
 ```{r}
