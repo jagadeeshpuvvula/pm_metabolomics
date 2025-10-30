@@ -318,8 +318,38 @@ res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mw
   select(-c(9)) |>
   mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$")) |>
   clean_names() |>
-  filter(fdr<0.2) |>
   mutate(across(where(is.character), as.factor))|>
+  mutate(
+  sex = factor(sex, levels = c("overall", "Male", "Female"))
+  )
+
+res_df_unique <- res_df |> 
+  select(sub_pathway, super_pathway)|>
+  distinct(sub_pathway, super_pathway, .keep_all = TRUE) |>
+  rename(pathway = sub_pathway)
+```
+
+#over representation analysis
+```{r}
+results <- ora_pathway_enrichment(res_df,
+                                  metabolite_fdr_col = "fdr",
+                                  metabolite_fdr_threshold = 0.2,
+                                  pathway_col = "sub_pathway",
+                                  min_pathway_size = 2,
+                                  min_sig_in_pathway = 1,
+                                  stratify_by_sex = TRUE)
+
+
+results_df <- results |>
+  left_join(res_df_unique, by = "pathway")
+
+write_csv(results_df, "~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_pathway_ora_results.csv")
+```
+
+#ora results
+```{r}
+ora_pathway_res<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/mwas_pathway_ora_results.csv") |>
+  filter(fdr<0.2) |>
   mutate(
     exposure = case_when(
       str_starts(variable, "bc") ~ "Black carbon",
@@ -344,38 +374,19 @@ res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mw
                  "4 month", "5 month", "6 month",
                  "7 month", "8 month", "9 month")
       ),
-  super_pathway = recode(super_pathway, 
-                           "Partially Characterized Molecules" = "Other",
-                           "Energy" = "Other"),
-  super_pathway = fct_relevel(super_pathway, 
-                               "Lipid", 
-                               "Amino Acid", 
-                               "Carbohydrate", 
-                               "Cofactors and Vitamins", 
-                               "Peptide", 
-                               "Nucleotide", 
-                               "Xenobiotics",
-                               "Other"),
   sex = factor(sex, levels = c("overall", "Male", "Female"))
-  ) 
-
-#summary of MWAS results
-summary_df <- res_df |>
-  group_by(exposure, sex, super_pathway, sub_pathway) |>
-  summarise(
-    distinct_exposure_windows = n_distinct(exposure_window),
-    exposure_windows = paste(unique(exposure_window), collapse = ", ") |> str_replace_all("\\s+month", ""),
-    metabolite_count = n(),
-    metabolites = paste(unique(chemical_name), collapse = ", "),
-    .groups = "drop"
   ) |>
-  filter(exposure_windows > 1,
-         metabolite_count > 2)
+  mutate(enrichment_ratio = if_else(enrichment_ratio>15, 15, enrichment_ratio),
+         exposure_window = str_remove(exposure_window, " month$")
+         ) |>
+  mutate(super_pathway = recode(super_pathway,
+                               'Cofactors and Vitamins' = 'Vit&Ene',
+                               'Energy' = 'Vit&Ene'))
 ```
 
 #visualizing results - Summarized heat map
 ```{r}
-ggplot(summary_df, aes(x = exposure_window, y = sub_pathway, fill = count)) +
+ggplot(ora_pathway_res, aes(x = exposure_window, y = pathway, fill = enrichment_ratio)) +
   facet_nested(super_pathway ~ exposure + sex,
                scales = "free",
                space = "free",
@@ -383,25 +394,26 @@ ggplot(summary_df, aes(x = exposure_window, y = sub_pathway, fill = count)) +
                labeller = label_wrap_gen(width = 15)) +
   geom_tile(color = "white") + 
   scale_fill_viridis(
-  name = "Number of metabolites",
+  name = "Enrichment Ratio",
   breaks = c(1, 5, 10, 15),
   labels = c("1", "5", "10", "15"),
   limits = c(1, 15)
   ) +
-  labs(x = "Gestational period - Third trimester", y = "Metabolic pathways") +
+  labs(x = "Gestational months", y = "") +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, color="black"),
-        axis.text.y = element_text(size=10, color="black"),
+  theme(axis.text.x = element_text(size=12, angle = 0, hjust = 0.5, vjust = 0.5, color="black"),
+        axis.text.y = element_text(size=12, color="black"),
         legend.position = "bottom",
         legend.text = element_text(angle = 0, hjust = 1, color="black"),
         legend.title = element_text(vjust = 1),
         legend.key.height = unit(0.3, "cm"),
         panel.grid.major.x = element_blank(), 
         panel.grid.minor.x = element_blank(),
-        strip.text.y = element_text(size=9, angle = 45, hjust = 0, color="black", face="bold"),
-        strip.text.x = element_text(size=11, color="black"),
+        strip.text.y = element_text(size=8, angle = 45, hjust = 0, color="black"),
+        strip.text.x = element_text(size=12, color="black"),
         strip.placement = "outside", 
-        strip.background = element_blank() )
+        strip.background = element_blank() 
+        )
 ```
 
 ```{r}
@@ -502,6 +514,13 @@ res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mw
 filter_type <- "any"  # Change to "any" for any N windows
 n_windows <- 4  # Change to desired number of windows
 
+# Calculate total unique chemicals per sub_pathway before filtering
+total_chemicals <- res_df |>
+  filter(!str_detect(variable, "cnt$")) |>
+  mutate(chemical_name = str_to_title(chemical_name)) |>
+  distinct(sub_pathway, chemical_name) |>
+  count(sub_pathway, name = "total_chemicals")
+
 summary_df2 <- res_df |>
   filter(fdr < 0.2,
          !str_detect(variable, "cnt$")) |>
@@ -514,6 +533,7 @@ summary_df2 <- res_df |>
   arrange(chemical_name, super_pathway, sub_pathway, prefix, sex, month_num) |>
   group_by(chemical_name, super_pathway, sub_pathway, prefix, sex) |>
   summarise(months = list(sort(unique(month_num))), .groups = "drop") |>
+  mutate(month_count = lengths(months)) |>
   (\(data) {
     if (filter_type == "consecutive") {
       data |>
@@ -536,7 +556,12 @@ summary_df2 <- res_df |>
         filter(lengths(months) >= n_windows) |>
         mutate(has_n_windows = TRUE)
     }
-  })()
+  })() |>
+  group_by(sub_pathway, prefix, sex) |>
+  mutate(n_chemicals = n_distinct(chemical_name)) |>
+  ungroup() |>
+  left_join(total_chemicals, by = "sub_pathway") |>
+  mutate(chemical_fraction = paste0(n_chemicals, "/", total_chemicals))
 
 viz_df <- res_df |>
   # Make sure names match the case used in summary_df2
@@ -641,41 +666,138 @@ metab_viz <- summary_df2 |>
   
 ```
 
-
-
 #export data for python - to produce sankey plot
 ```{r}
-res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
-  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$")) |> clean_names()
+res_df <- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
+  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$")) |> 
+  clean_names() |>
+  filter(fdr < 0.2, 
+         sub_pathway %in% ora_pathway_res$pathway)
 
+# Step 1: Calculate TOTAL chemical counts per sub_pathway (from full dataset)
+chem_counts <- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
+    select(chemical_name, sub_pathway) |> 
+    distinct() |>
+    mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$")) |>
+    group_by(sub_pathway) |>
+    summarise(
+        n_chemicals_total = n_distinct(chemical_name),
+        .groups = "drop"
+    )
+
+# Step 1b: Calculate TOTAL sub_pathway counts per super_pathway (from full dataset)
+subpathway_counts <- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
+    select(super_pathway, sub_pathway) |>
+    distinct() |>
+    mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$")) |>
+    mutate(
+        super_pathway = recode(super_pathway, 
+                               "Partially Characterized Molecules" = "Other",
+                               "Energy" = "Other")
+    ) |>
+    group_by(super_pathway) |>
+    summarise(
+        n_subpathways_total = n_distinct(sub_pathway),
+        .groups = "drop"
+    )
+
+# Step 2: Create summary table with counts PER EXPOSURE
 summary_df <- res_df |>
-  filter(fdr < 0.2) |>
-  mutate(
-    exposure = case_when(
-      str_starts(variable, "bc") ~ "Black carbon",
-      str_starts(variable, "pm") ~ "PM2.5",
-      TRUE ~ NA_character_
-    ),
-  super_pathway = recode(super_pathway, 
-                           "Partially Characterized Molecules" = "Other",
-                           "Energy" = "Other"),
-  super_pathway = fct_relevel(super_pathway, 
-                               "Lipid", 
-                               "Amino Acid", 
-                               "Carbohydrate", 
-                               "Cofactors and Vitamins", 
-                               "Peptide", 
-                               "Nucleotide", 
-                               "Xenobiotics",
-                               "Other")
-  ) |> select(exposure, super_pathway, sub_pathway, chemical_name) |>
-  group_by(exposure, super_pathway, sub_pathway) |>
-  summarise(
-    n_chem = n_distinct(chemical_name),
-    .groups = "drop"
-  ) 
+    mutate(
+        exposure = case_when(
+            str_starts(variable, "bc") ~ "Black carbon",
+            str_starts(variable, "pm") ~ "PM2.5",
+            TRUE ~ NA_character_
+        ),
+        super_pathway = recode(super_pathway, 
+                               "Partially Characterized Molecules" = "Other",
+                               "Energy" = "Other"),
+        super_pathway = fct_relevel(super_pathway, 
+                                    "Lipid", 
+                                    "Amino Acid", 
+                                    "Carbohydrate", 
+                                    "Cofactors and Vitamins", 
+                                    "Peptide", 
+                                    "Nucleotide", 
+                                    "Xenobiotics",
+                                    "Other")
+    ) |>
+    select(exposure, super_pathway, sub_pathway, chemical_name) |>
+    group_by(exposure, super_pathway, sub_pathway) |>
+    summarise(
+        n_chem_sig = n_distinct(chemical_name),
+        .groups = "drop"
+    ) |>
+    left_join(chem_counts, by = "sub_pathway") |>
+    mutate(
+        percent_chem = round((n_chem_sig / n_chemicals_total) * 100, 2)
+    )
 
-write_csv(summary_df, "~/Documents/air_polln_metabolomics/result/lm_mwas/sankey_plt.csv")
+# Step 3: Count unique sub_pathways per super_pathway PER EXPOSURE
+sig_subpathways <- summary_df |>
+    group_by(exposure, super_pathway) |>
+    summarise(
+        n_subpathways_sig = n_distinct(sub_pathway),
+        .groups = "drop"
+    )
+
+# Step 4: Join and calculate percentages
+summary_df <- summary_df |>
+    left_join(sig_subpathways, by = c("exposure", "super_pathway")) |>
+    left_join(subpathway_counts, by = "super_pathway") |>
+    mutate(
+        percent_sub_pathway = round((n_subpathways_sig / n_subpathways_total) * 100, 2)
+    )
+
+# Step 5: Get the percentages for the OTHER exposure to include in labels
+summary_other_exposure <- summary_df |>
+    select(exposure, super_pathway, sub_pathway, percent_chem, percent_sub_pathway) |>
+    mutate(
+        other_exposure = ifelse(exposure == "Black carbon", "PM2.5", "Black carbon")
+    ) |>
+    select(other_exposure, super_pathway, sub_pathway, 
+           percent_chem_other = percent_chem, 
+           percent_sub_pathway_other = percent_sub_pathway)
+
+# Step 6: Join with other exposure data and format labels
+summary_df_final <- summary_df |>
+    select(exposure, super_pathway, sub_pathway, n_chem_sig, 
+           percent_chem, percent_sub_pathway) |>
+    left_join(
+        summary_other_exposure,
+        by = c("exposure" = "other_exposure", "super_pathway", "sub_pathway")
+    ) |>
+    mutate(
+        # Format labels based on current exposure
+        sub_pathway = case_when(
+            exposure == "Black carbon" ~ paste0(
+                sub_pathway, " (",
+                round(percent_chem), "|",
+                round(coalesce(percent_chem_other, 0)), ")"
+            ),
+            exposure == "PM2.5" ~ paste0(
+                sub_pathway, " (",
+                round(percent_chem_other), "|",   # BC comes first
+                round(percent_chem), ")"
+            )
+        ),
+        super_pathway = case_when(
+            exposure == "Black carbon" ~ paste0(
+                super_pathway, " (",
+                round(percent_sub_pathway), "|",
+                round(coalesce(percent_sub_pathway_other, 0)), ")"
+            ),
+            exposure == "PM2.5" ~ paste0(
+                super_pathway, " (",
+                round(percent_sub_pathway_other), "|",   # BC comes first
+                round(percent_sub_pathway), ")"
+            )
+        )
+    ) |>
+    select(exposure, super_pathway, sub_pathway, n_chem_sig, percent_chem, percent_sub_pathway) |>
+  rename(n_chem = n_chem_sig)
+
+write_csv(summary_df_final, "~/Documents/air_polln_metabolomics/result/lm_mwas/sankey_plt.csv")
 ```
 
 #upset - overlap plot
@@ -814,11 +936,15 @@ table_s1 <- tibble::tribble(
   "Other", 0, 140
 )
 
-res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
-  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$")) |> clean_names()
+res_df <- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
+  mutate(sub_pathway = str_remove(sub_pathway, " Metabolism$")) |>
+  clean_names() |>
+  filter(fdr < 0.2) |>
+  semi_join(ora_pathway_res, by = c("sub_pathway" = "pathway", 
+                                    "variable" = "variable",
+                                    "sex" = "sex"))
 
-summary_df<- res_df |>
-  filter(fdr < 0.2)  |>
+summary_df<- res_df  |>
   mutate(
     exposure = case_when(
       str_starts(variable, "bc") ~ "Black carbon",
@@ -858,42 +984,73 @@ write_csv(summary_df, "~/Documents/air_polln_metabolomics/result/lm_mwas/summary
 
 #article text - specific pathway detailing
 ```{r}
-x <- res_df |>
-  filter(fdr < 0.2) |>
+res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
+  clean_names()
+
+# Set filter options
+filter_type <- "any"  # Change to "any" for any N windows
+n_windows <- 1  # Change to desired number of windows
+
+# Calculate total unique chemicals per sub_pathway before filtering
+total_chemicals <- res_df |>
+  filter(!str_detect(variable, "cnt$")) |>
+  mutate(chemical_name = str_to_title(chemical_name)) |>
+  distinct(sub_pathway, chemical_name) |>
+  count(sub_pathway, name = "total_chemicals")
+
+summary_df2 <- res_df |>
+  filter(fdr < 0.2,
+         !str_detect(variable, "cnt$")) |>
   mutate(
-    window = str_extract(variable, "(?<=_).*"),
-    exposure = case_when(
-      str_starts(variable, "bc") ~ "Black carbon",
-      str_starts(variable, "pm") ~ "PM2.5",
-      TRUE ~ NA_character_
-    ),
-  super_pathway = recode(super_pathway, 
-                           "Partially Characterized Molecules" = "Other",
-                           "Energy" = "Other"),
-  super_pathway = fct_relevel(super_pathway, 
-                               "Lipid", 
-                               "Amino Acid", 
-                               "Carbohydrate", 
-                               "Cofactors and Vitamins", 
-                               "Peptide", 
-                               "Nucleotide", 
-                               "Xenobiotics",
-                               "Other")
-  )  |>
-  filter(sub_pathway =="Lysine",
-         exposure == "Black carbon",
-         sex == "male") |>
-  distinct(chemical_name) |> 
-  pull(chemical_name) |> 
-  str_c(collapse = ", ")
+    chemical_name = str_to_title(chemical_name),
+    prefix = str_remove(variable, "_?\\d+month$"),
+    month_num = as.integer(str_extract(variable, "(?<=_)\\d+(?=month$)"))
+  ) |>
+  filter(!is.na(prefix), !is.na(month_num)) |>
+  arrange(chemical_name, super_pathway, sub_pathway, prefix, sex, month_num) |>
+  group_by(chemical_name, super_pathway, sub_pathway, prefix, sex) |>
+  summarise(months = list(sort(unique(month_num))), .groups = "drop") |>
+  mutate(month_count = lengths(months)) |>
+  (\(data) {
+    if (filter_type == "consecutive") {
+      data |>
+        rowwise() |>
+        mutate(
+          has_n_windows = {
+            m <- months
+            if (length(m) < n_windows) FALSE
+            else {
+              d <- diff(m)
+              grp <- cumsum(c(0, d != 1))
+              max(rle(grp)$lengths) >= n_windows
+            }
+          }
+        ) |>
+        ungroup() |>
+        filter(has_n_windows)
+    } else {
+      data |>
+        filter(lengths(months) >= n_windows) |>
+        mutate(has_n_windows = TRUE)
+    }
+  })() |>
+  group_by(sub_pathway, prefix, sex) |>
+  mutate(n_chemicals = n_distinct(chemical_name)) |>
+  ungroup() |>
+  left_join(total_chemicals, by = "sub_pathway") |>
+  filter(total_chemicals>3) |>
+  mutate(chemical_fraction = paste0(n_chemicals, "/", total_chemicals),
+         chem_frac_n = n_chemicals/total_chemicals) |>
+  select(-c(8:10))
 
-chem_list <- str_split(x, ",\\s*") |> unlist()
 
-
-#Get compound IDs
-kegg_list <- df_annotations |> 
-  filter(chemical_name %in% chem_list) |> 
-  pull(hmdb)
+x<- summary_df2 |>
+  filter(
+    sub_pathway == "Pyrimidine Metabolism, Cytidine containing",
+    #super_pathway == "Peptide",
+    prefix == "pm",
+    sex == "Female"
+  )
 ```
 
 #for text description
