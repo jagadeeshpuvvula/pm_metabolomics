@@ -918,10 +918,8 @@ if (dev.cur() > 1) dev.off()
 ```
 
 
-#summary for article text
+#summary for article text [Table S3]
 ```{r}
-#total tested
-# Example: Table S1 as a data frame
 table_s1 <- tibble::tribble(
   ~super_pathway, ~n_sub_pathways_total, ~n_chem_total,
   "Lipid", 55, 433,
@@ -984,98 +982,86 @@ write_csv(summary_df, "~/Documents/air_polln_metabolomics/result/lm_mwas/summary
 
 #article text - specific pathway detailing
 ```{r}
-res_df<- read_csv("~/Documents/air_polln_metabolomics/result/lm_mwas/placenta_mwas_oct_2025_anno.csv") |>
-  clean_names()
+# get ora_pathway_res dataframe from line 351
 
-# Set filter options
-filter_type <- "any"  # Change to "any" for any N windows
-n_windows <- 1  # Change to desired number of windows
-
-# Calculate total unique chemicals per sub_pathway before filtering
-total_chemicals <- res_df |>
-  filter(!str_detect(variable, "cnt$")) |>
-  mutate(chemical_name = str_to_title(chemical_name)) |>
-  distinct(sub_pathway, chemical_name) |>
-  count(sub_pathway, name = "total_chemicals")
-
-summary_df2 <- res_df |>
-  filter(fdr < 0.2,
-         !str_detect(variable, "cnt$")) |>
-  mutate(
-    chemical_name = str_to_title(chemical_name),
-    prefix = str_remove(variable, "_?\\d+month$"),
-    month_num = as.integer(str_extract(variable, "(?<=_)\\d+(?=month$)"))
-  ) |>
-  filter(!is.na(prefix), !is.na(month_num)) |>
-  arrange(chemical_name, super_pathway, sub_pathway, prefix, sex, month_num) |>
-  group_by(chemical_name, super_pathway, sub_pathway, prefix, sex) |>
-  summarise(months = list(sort(unique(month_num))), .groups = "drop") |>
-  mutate(month_count = lengths(months)) |>
-  (\(data) {
-    if (filter_type == "consecutive") {
-      data |>
-        rowwise() |>
-        mutate(
-          has_n_windows = {
-            m <- months
-            if (length(m) < n_windows) FALSE
-            else {
-              d <- diff(m)
-              grp <- cumsum(c(0, d != 1))
-              max(rle(grp)$lengths) >= n_windows
-            }
-          }
-        ) |>
-        ungroup() |>
-        filter(has_n_windows)
-    } else {
-      data |>
-        filter(lengths(months) >= n_windows) |>
-        mutate(has_n_windows = TRUE)
-    }
-  })() |>
-  group_by(sub_pathway, prefix, sex) |>
-  mutate(n_chemicals = n_distinct(chemical_name)) |>
-  ungroup() |>
-  left_join(total_chemicals, by = "sub_pathway") |>
-  filter(total_chemicals>3) |>
-  mutate(chemical_fraction = paste0(n_chemicals, "/", total_chemicals),
-         chem_frac_n = n_chemicals/total_chemicals) |>
-  select(-c(8:10))
-
-
-x<- summary_df2 |>
+text_bc<- ora_pathway_res |>
   filter(
-    sub_pathway == "Pyrimidine Metabolism, Cytidine containing",
-    #super_pathway == "Peptide",
-    prefix == "pm",
-    sex == "Female"
+    fdr<0.2,
+    sex == "overall",
+         exposure == "Black carbon",
+         super_pathway %in% c("Peptide"),
+         pathway == "Gamma-glutamyl Amino Acid") 
+
+text_pm<- ora_pathway_res |>
+  filter(sex == "overall",
+         exposure == "PM2.5",
+         #super_pathway %in% c("Nucleotide"),
+         #pathway == "Purine Metabolism, Adenine containing"
+         ) 
+
+
+#find most overlapping metabolites
+text_pm$significant_metabolites %>%
+  # remove parenthetical content, split on ';' and trim
+  str_remove_all("\\(.*?\\)") %>%
+  str_split(";") %>%
+  map(~ str_trim(.x)) %>%
+  # remove empty entries and trailing asterisks, make unique per observation
+  map(~ .x[.x != ""] %>% str_replace_all("\\*+$", "") %>% unique()) %>%
+  # flatten to one vector of "observation-presence" and tabulate
+  imap_dfr(~ tibble(metabolite = .x, obs = .y)) %>%  # .y = observation index
+  distinct(metabolite, obs) %>%                      # ensure one count per obs
+  count(metabolite, name = "n_obs") %>%              # how many observations contain it
+  arrange(desc(n_obs))
+
+#repeated pathways over time
+# Step 1: summarize repeated pathways across windows
+pathway_repeat_summary <- ora_pathway_res %>%
+  group_by(exposure, sex, pathway) %>%
+  summarize(
+    window_count = n_distinct(exposure_window),
+    windows = paste(sort(unique(exposure_window)), collapse = ", "),
+    .groups = "drop"
   )
+
+# Step 2: metabolite repetition across windows
+metabolite_rep_summary <- ora_pathway_res %>%
+  group_by(exposure, sex, pathway, exposure_window) %>% 
+  summarise(
+    metabolites = list(
+      significant_metabolites %>%
+        str_remove_all("\\(.*?\\)") %>%   # remove parentheses
+        str_split(";") %>%                # split on ;
+        unlist() %>%
+        str_trim() %>%                    # trim spaces
+        str_replace_all("\\*+$", "") %>%  # remove trailing *
+        .[. != ""] %>%                    # remove empties
+        unique()
+    ),
+    .groups = "drop"
+  ) %>%
+  unnest(metabolites) %>% 
+  distinct(exposure, sex, pathway, exposure_window, metabolites) %>%
+  count(exposure, sex, pathway, metabolites, name = "n_windows") %>%
+  group_by(exposure, sex, pathway) %>%
+  arrange(desc(n_windows), metabolites) %>%
+  slice_head(n = 3) %>%   # <-- TOP 3 METABOLITES
+  mutate(metabolite_fmt = paste0(metabolites, " (", n_windows, ")")) %>%
+  summarize(
+    top_metabolites = paste(metabolite_fmt, collapse = ", "),
+    .groups = "drop"
+  )
+
+# Step 3: merge with pathway summary
+final_result <- pathway_repeat_summary %>%
+  left_join(metabolite_rep_summary, by = c("exposure", "sex", "pathway"))
+
+#female paragraph
+res_fem<- final_result |>
+  filter(sex == "Female")
+
 ```
 
-#for text description
-```{r}
-text_summary<- res_df |>
-  filter(fdr < 0.2) |>
-  mutate(
-    exposure = case_when(
-      str_starts(variable, "bc") ~ "Black carbon",
-      str_starts(variable, "pm") ~ "PM2.5",
-      TRUE ~ NA_character_
-    ),
-  super_pathway = recode(super_pathway, 
-                           "Partially Characterized Molecules" = "Other",
-                           "Energy" = "Other"),
-  super_pathway = fct_relevel(super_pathway, 
-                               "Lipid", 
-                               "Amino Acid", 
-                               "Carbohydrate", 
-                               "Cofactors and Vitamins", 
-                               "Peptide", 
-                               "Nucleotide", 
-                               "Xenobiotics",
-                               "Other")
-  ) |>
-  select(c(7:14))
-```
+
+
 
